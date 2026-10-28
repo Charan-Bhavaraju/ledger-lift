@@ -1,0 +1,909 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ledger Lift</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Schibsted+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0f1b2d; --ink-2: #4a5a72; --paper: #eef2f7; --card: #ffffff; --line: #d8e0eb; --grid: #e3e9f2;
+    --accent: #3d5afe; --accent-ink: #ffffff; --accent-soft: #e6eaff; --hit: #c6f6ea; --hit-ink: #064e3b; --warn: #9a5b00; --warn-soft: #fff1d6;
+    --display: "Bricolage Grotesque", system-ui, sans-serif; --body: "Schibsted Grotesk", system-ui, sans-serif; --mono: "JetBrains Mono", ui-monospace, monospace;
+    --r: 12px; --shadow: 0 1px 0 rgba(15,27,45,.04), 0 8px 24px -12px rgba(15,27,45,.18);
+  }
+  @media (prefers-color-scheme: dark) { :root {
+    --ink: #e6ecf5; --ink-2: #93a3bb; --paper: #0b1220; --card: #111a2b; --line: #22304a; --grid: #172238;
+    --accent: #7c8cff; --accent-ink: #0b1220; --accent-soft: #1b2448; --hit: #134e4a; --hit-ink: #b7f5e4; --warn: #f5c26b; --warn-soft: #3a2a10;
+  } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.5 var(--body); -webkit-font-smoothing: antialiased; }
+  .shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 40px; max-width: 1320px; margin: 0 auto; padding: 40px 24px 80px; }
+
+  /* step rail: the flow is a real sequence, so steps are numbered and light up as they unlock */
+  .rail { position: sticky; top: 40px; align-self: start; }
+  .brand { font: 700 26px/1.1 var(--display); letter-spacing: -.02em; margin: 0 0 6px; }
+  .brand span { color: var(--accent); }
+  .tag { color: var(--ink-2); font-size: 13px; margin: 0 0 28px; }
+  .rail ol { list-style: none; margin: 0; padding: 0; counter-reset: s; border-left: 1px solid var(--line); }
+  .rail li a { display: block; padding: 7px 0 7px 16px; margin-left: -1px; border-left: 2px solid transparent; color: var(--ink-2); text-decoration: none; font-size: 13px; opacity: .45; pointer-events: none; }
+  .rail li a::before { counter-increment: s; content: counter(s); display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--line); font: 500 11px var(--mono); margin-right: 10px; }
+  .rail li a.open { opacity: 1; pointer-events: auto; color: var(--ink); }
+  .rail li a.open:hover { border-left-color: var(--line); }
+  .rail li a.done::before { content: "✓"; background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+  .rail li a.current { border-left-color: var(--accent); font-weight: 600; }
+  .rail li a.current::before { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .privacy { margin-top: 28px; font-size: 13px; color: var(--ink-2); padding: 12px; border: 1px dashed var(--line); border-radius: 10px; }
+
+  section { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); padding: 24px; margin-bottom: 20px; box-shadow: var(--shadow); scroll-margin-top: 24px; animation: rise .35s ease-out both; }
+  section[hidden] { display: none; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+  h2 { font: 600 21px/1.2 var(--display); letter-spacing: -.01em; margin: 0 0 4px; }
+  .hint { color: var(--ink-2); font-size: 13px; margin: 0 0 16px; }
+  .eyebrow { font: 500 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin-bottom: 6px; }
+
+  /* signature: drop zone drawn as a ruled ledger sheet; a scan line sweeps it while pages are read */
+  .drop { position: relative; display: grid; place-items: center; text-align: center; min-height: 220px; border: 1.5px dashed var(--line); border-radius: var(--r); cursor: pointer; overflow: hidden; transition: border-color .2s, background-color .2s;
+    background-color: var(--card);
+    background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 100% 28px, 120px 100%; background-position: 0 14px, 60px 0; }
+  .drop:hover, .drop.over { border-color: var(--accent); background-color: var(--accent-soft); }
+  .drop:focus-within { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .drop input { position: absolute; inset: 0; opacity: 0; cursor: pointer; z-index: 2; }
+  .drop > div:not(.scan) { position: relative; background: var(--card); padding: 18px 28px; border-radius: 10px; border: 1px solid var(--line); }
+  .drop .big { font: 700 clamp(26px, 4vw, 38px)/1.05 var(--display); letter-spacing: -.03em; margin: 0 0 8px; }
+  .drop .small { color: var(--ink-2); font-size: 13px; }
+  .drop .small b { color: var(--accent); font-weight: 600; }
+  .scan { position: absolute; left: 0; right: 0; height: 2px; top: 0; background: var(--accent); opacity: 0; pointer-events: none; }
+  .scan::after { content: ""; position: absolute; left: 0; right: 0; bottom: 2px; height: 48px; background: linear-gradient(to top, var(--accent-soft), transparent); }
+  body.busy .scan { opacity: 1; animation: sweep 1.4s ease-in-out infinite alternate; }
+  @keyframes sweep { to { top: calc(100% - 2px); } }
+  .statusbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 14px; font-size: 13px; }
+  #status { color: var(--ink-2); }
+  .progress { flex: 0 0 180px; height: 4px; background: var(--grid); border-radius: 4px; overflow: hidden; }
+  .progress div { height: 100%; background: var(--accent); transform-origin: left; transform: scaleX(0); transition: transform .15s; }
+
+  label { font-weight: 600; font-size: 13px; display: block; margin: 16px 0 6px; }
+  input[type=text], textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; font: inherit; background: var(--paper); color: var(--ink); transition: border-color .15s, box-shadow .15s; }
+  textarea { min-height: 92px; font: 13px/1.6 var(--mono); resize: vertical; }
+  input[type=text]:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .check { display: flex; gap: 10px; align-items: center; font-weight: 400; font-size: 13px; margin: 14px 0 0; cursor: pointer; }
+  input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
+
+  button { font: 600 13px var(--body); padding: 9px 16px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); cursor: pointer; transition: transform .1s, filter .15s; }
+  button:hover { filter: brightness(1.08); }
+  button:active { transform: translateY(1px); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.ghost { background: transparent; color: var(--accent); border-color: var(--line); }
+  button.ghost:hover { border-color: var(--accent); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 16px; }
+  .muted { color: var(--ink-2); }
+  .count { font: 500 11px var(--mono); color: var(--ink-2); }
+
+  .scroll { overflow: auto; max-height: 540px; border: 1px solid var(--line); border-radius: 10px; margin-top: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 10px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--paper); position: sticky; top: 0; z-index: 1; font: 500 11px var(--mono); letter-spacing: .04em; text-transform: uppercase; color: var(--ink-2); }
+  tbody tr { transition: background-color .12s; }
+  tbody tr:hover { background: var(--accent-soft); }
+  tbody tr:last-child td { border-bottom: 0; }
+  tr:has(.tsel:checked) { background: var(--accent-soft); }
+  td.num { text-align: right; white-space: nowrap; font: 13px var(--mono); font-variant-numeric: tabular-nums; }
+  mark { background: var(--hit); color: var(--hit-ink); border-radius: 4px; padding: 0 3px; }
+  .chip { display: inline-block; font: 11px var(--mono); padding: 2px 8px; margin: 2px 4px 2px 0; border-radius: 999px; background: var(--paper); border: 1px solid var(--line); color: var(--ink-2); }
+  select { font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); max-width: 280px; }
+  .tbl-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font: 600 17px var(--display); margin: 22px 0 0; }
+  .tbl-title:first-child { margin-top: 0; }
+  details summary { cursor: pointer; color: var(--accent); font-size: 13px; margin-top: 4px; }
+  details div { font-size: 13px; color: var(--ink-2); margin-top: 6px; }
+
+  .two { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+  .summary { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .summary span { font-size: 13px; padding: 6px 12px; border-radius: 999px; background: var(--paper); border: 1px solid var(--line); color: var(--ink-2); }
+  .summary b { color: var(--ink); font-family: var(--mono); font-weight: 500; }
+  .flag { display: inline-block; font: 11px var(--mono); padding: 1px 7px; margin: 1px 4px 1px 0; border-radius: 6px; background: var(--warn-soft); color: var(--warn); white-space: nowrap; }
+  tr.off td:not(:first-child) { opacity: .42; }
+  tr.off td:nth-child(4) { text-decoration: line-through; }
+  .spacer { flex: 1; }
+  button.sm { padding: 4px 10px; font-size: 11px; display: inline-flex; gap: 6px; align-items: center; }
+  button.icon { display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; border-radius: 8px; background: transparent; border: 1px solid transparent; color: var(--ink-2); font-size: 13px; }
+  button.icon.sm { width: 24px; height: 24px; }
+  button.icon:hover:not(:disabled) { border-color: var(--line); color: var(--accent); background: var(--card); }
+  button.icon:disabled { opacity: .3; cursor: default; }
+  button.link { background: none; border: 0; padding: 0; color: var(--accent); font: 500 13px var(--mono); display: inline-flex; gap: 5px; align-items: center; }
+  .ocols { display: flex; gap: 8px; flex-wrap: wrap; }
+  .ocol { display: flex; align-items: center; gap: 2px; padding: 4px 4px 4px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
+  .ocol.value { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); background: var(--accent-soft); }
+  .ocol .kind { font: 500 11px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--ink-2); margin-right: 6px; }
+  .ocol input[type=text] { width: 15ch; padding: 4px 8px; border-radius: 6px; background: var(--card); font-size: 13px; }
+  .opts { gap: 20px; }
+  .toolbar { padding-top: 16px; border-top: 1px solid var(--line); }
+  .th { display: inline-flex; align-items: center; gap: 6px; }
+  th .icon { color: var(--ink-2); }
+  td.cell { cursor: copy; }
+  td.cell:hover { box-shadow: inset 0 0 0 1.5px var(--accent); border-radius: 4px; }
+  tr.flagged td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+  td.acts { white-space: nowrap; width: 1%; }
+  #files .scroll { margin-top: 16px; }
+  #files input[type=text] { padding: 6px 10px; font-size: 13px; min-width: 260px; }
+  dialog { width: min(1100px, 96vw); height: 92vh; padding: 0; border: 1px solid var(--line); border-radius: var(--r); background: var(--card); color: var(--ink); box-shadow: 0 24px 64px -24px rgba(15,27,45,.45); }
+  dialog::backdrop { background: rgba(11,18,32,.55); }
+  dialog[open] { display: flex; flex-direction: column; overflow: hidden; }
+  .vbar { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .vbody { flex: 1; overflow: auto; background: var(--paper); padding: 16px; }
+  .vpage { position: relative; width: max-content; margin: 0 auto; box-shadow: var(--shadow); background: #fff; }
+  .vpage canvas { display: block; }
+  .vhl { position: absolute; border: 2px solid var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 4px; pointer-events: none; }
+  .vhl[hidden] { display: none; }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 12px); opacity: 0; padding: 10px 16px; border-radius: 999px; background: var(--ink); color: var(--paper); font-size: 13px; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 10; }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+  .nav { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--line); }
+  .nav button:disabled { opacity: .4; cursor: not-allowed; filter: none; }
+  .searchbox { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .searchbox input { flex: 1; min-width: 220px; }
+  .tlist { display: grid; gap: 8px; margin-top: 14px; max-height: 560px; overflow: auto; padding: 2px; }
+  .titem { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: start; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; transition: border-color .15s, background-color .15s; }
+  .titem:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+  .titem:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+  .titem input[type=checkbox] { margin-top: 3px; }
+  .titem .t { font-weight: 600; }
+  .titem .meta { font-size: 13px; color: var(--ink-2); margin-top: 2px; }
+  .titem details { margin-top: 6px; }
+  .empty { padding: 28px; text-align: center; color: var(--ink-2); border: 1px dashed var(--line); border-radius: 10px; }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); cursor: text; }
+  .tags:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .tags input { flex: 1; min-width: 180px; border: 0; background: transparent; padding: 4px 6px; font: inherit; color: var(--ink); outline: none; }
+  .tag-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 4px 3px 10px; border-radius: 999px; background: var(--hit); color: var(--hit-ink); font-size: 13px; font-weight: 500; }
+  .tags.ex .tag-chip { background: var(--warn-soft); color: var(--warn); }
+  .tag-chip button { width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; font-size: 13px; line-height: 1; }
+  .tag-chip button:hover { background: rgba(0,0,0,.08); filter: none; }
+  details.more { margin-top: 18px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+  details.more summary { font-size: 13px; font-weight: 600; color: var(--ink); }
+  details.more[open] summary { margin-bottom: 6px; }
+  .exportbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 18px; padding: 12px; border-radius: 10px; background: var(--paper); }
+  .tip { margin: 10px 0 0; }
+  .view { white-space: nowrap; }
+  @media (max-width: 860px) {
+    .two { grid-template-columns: 1fr; }
+    .shell { grid-template-columns: 1fr; gap: 20px; padding: 24px 16px 60px; }
+    .rail { position: static; }
+    .rail ol { display: flex; flex-wrap: wrap; border-left: 0; gap: 4px 14px; }
+    .rail li a { padding: 4px 0; border-left: 0; }
+    .privacy { display: none; }
+    section { padding: 18px; }
+  }
+  @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="rail">
+    <p class="brand">Ledger<span>Lift</span></p>
+    <p class="tag">Pull keyword rows out of budget PDF tables.</p>
+    <ol id="steps">
+      <li><a href="#" data-step="0">Upload PDFs</a></li>
+      <li><a href="#" data-step="1">Choose tables</a></li>
+      <li><a href="#" data-step="2">Keywords</a></li>
+      <li><a href="#" data-step="3">Review rows</a></li>
+      <li><a href="#" data-step="4">Export</a></li>
+    </ol>
+    <p class="privacy">Runs entirely in your browser. Your PDFs never leave this device.</p>
+  </aside>
+
+  <main>
+  <section id="s-upload" class="step">
+    <div class="eyebrow">Step 1 of 5</div>
+    <h2>Upload your budget PDFs</h2>
+    <p class="hint">Add one PDF or many, e.g. one per state. You can add more at any time.</p>
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept="application/pdf" multiple>
+      <div><p class="big">Drop PDFs here</p><p class="small">or <b>browse files</b></p></div>
+      <div class="scan"></div>
+    </label>
+    <div class="statusbar"><span id="status"></span><div class="progress" id="prog" hidden><div></div></div></div>
+    <div id="files"></div>
+    <div class="nav"><span></span><button data-next="1" disabled>Next: choose tables</button></div>
+  </section>
+
+  <section id="s-tables" class="step" hidden>
+    <div class="eyebrow">Step 2 of 5</div>
+    <h2>Which tables should be searched?</h2>
+    <p class="hint">Tick the tables that hold the figures you report. Tables spanning several pages are already joined.</p>
+    <div class="searchbox"><input type="text" id="tfilter" placeholder="Search tables, e.g. works, actual expenditure, Assam"><button class="ghost sm" id="all">Tick all shown</button><button class="ghost sm" id="none">Untick all</button></div>
+    <div id="tables" class="tlist"></div>
+    <div class="nav"><button class="ghost" data-next="0">Back</button><span class="count" id="selcount"></span><button data-next="2" id="to-kw" disabled>Next: keywords</button></div>
+  </section>
+
+  <section id="s-search" class="step" hidden>
+    <div class="eyebrow">Step 3 of 5</div>
+    <h2>What should the rows mention?</h2>
+    <p class="hint">A row is picked up when its description contains any of these words. Press Enter to add a word.</p>
+    <label for="kw-in">Include rows that mention</label>
+    <div class="tags" id="kw"><input id="kw-in" placeholder="Add a word, e.g. hospital"></div>
+    <label for="xkw-in">Leave out rows that mention</label>
+    <div class="tags ex" id="xkw"><input id="xkw-in" placeholder="Add a word, e.g. veterinary"></div>
+    <details class="more"><summary>More options</summary>
+      <label class="check"><input type="checkbox" id="latin" checked> Use only the English text of descriptions (recommended for bilingual Hindi/English PDFs)</label>
+    </details>
+    <div class="nav"><button class="ghost" data-next="1">Back</button><span></span><button id="go">Find rows</button></div>
+  </section>
+
+  <section id="s-raw" class="step" hidden>
+    <div class="eyebrow">Step 4 of 5</div>
+    <h2>Check the rows found</h2>
+    <p class="hint">Untick anything you don't want. Rows marked <span class="flag">check</span> may need a second look. Click <b>view</b> to see a row in the PDF.</p>
+    <div id="summary" class="summary"></div>
+    <div id="raw"></div>
+    <div class="nav"><button class="ghost" data-next="2">Back</button><span></span><button data-next="4">Next: export</button></div>
+  </section>
+
+  <section id="s-out" class="step" hidden>
+    <div class="eyebrow">Step 5 of 5</div>
+    <h2>Export</h2>
+    <p class="hint">These are the columns of your sheet. Rename a header by typing in it, use the arrows to reorder.</p>
+    <div id="ocols" class="ocols"></div>
+    <div class="row"><select id="addcol" aria-label="Add a column"></select></div>
+    <details class="more" id="mapwrap"><summary>Which source column fills each value column</summary>
+      <div class="scroll" style="max-height:none"><table><thead id="map-h"></thead><tbody id="map"></tbody></table></div>
+    </details>
+    <details class="more"><summary>More options</summary>
+      <label for="prefix">Text added before every Entity</label>
+      <input type="text" id="prefix" value="OCM-Projects-">
+      <div class="row opts">
+        <label class="check" style="margin:0">Show amounts in
+          <select id="unit"><option value="">the PDF's own unit</option><option value="rupees">rupees</option><option value="thousand">thousands</option><option value="lakh">lakhs</option><option value="crore">crores</option></select></label>
+        <label class="check" style="margin:0"><input type="checkbox" id="fmt" checked> Write amounts as 1,234.00 and zero as -</label>
+      </div>
+      <div class="row"><span class="muted">Start over with:</span><button class="ghost sm" id="preset-sample">Entity, Description, Actual</button><button class="ghost sm" id="preset-all">Every column</button></div>
+    </details>
+    <div class="exportbar">
+      <button id="xlsx-out">Download Excel</button><button class="ghost" id="copy-out">Copy all</button><button class="ghost sm" id="csv-out">CSV</button>
+      <span class="spacer"></span><span id="out-count" class="count"></span>
+    </div>
+    <p class="hint tip">Tip: click any cell to copy it. The <span aria-hidden="true">⧉</span> icons copy a whole column or row.</p>
+    <div class="scroll"><table id="out"></table></div>
+    <div class="nav"><button class="ghost" data-next="3">Back</button><span></span><span></span></div>
+  </section>
+  </main>
+</div>
+
+<dialog id="viewer">
+  <div class="vbar">
+    <b id="vtitle"></b>
+    <span class="spacer"></span>
+    <button class="ghost" id="vprev" aria-label="Previous page">‹</button><span id="vpage" class="count"></span><button class="ghost" id="vnext" aria-label="Next page">›</button>
+    <button class="ghost" id="vclose">Close</button>
+  </div>
+  <div class="vbody"><div class="vpage"><canvas id="vcanvas"></canvas><div id="vhl" class="vhl"></div></div></div>
+</dialog>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script id="core">
+// ---- PDF table extraction core (no DOM). Needs a pdfjs object exposing OPS. ----
+const NUM = /^\(?-?\d[\d,]*(\.\d+)?\)?$/;
+const NIL = /^(\.{2,}|…|-|–|—|nil)$/i;
+// ponytail: "readable" = ASCII letters; legacy Indic fonts map glyphs onto Latin-Extended codepoints, so those count as noise
+const LATIN = /[A-Za-z]/;
+const NONLATIN_LETTER = /[^\P{L}A-Za-z]|[\p{M}\u{E000}-\u{F8FF}]/u;
+
+function mul(m, n) {
+  return [m[0]*n[0]+m[2]*n[1], m[1]*n[0]+m[3]*n[1], m[0]*n[2]+m[2]*n[3], m[1]*n[2]+m[3]*n[3], m[0]*n[4]+m[2]*n[5]+m[4], m[1]*n[4]+m[3]*n[5]+m[5]];
+}
+
+// Text tokens + ruling segments for one page, in top-down coordinates.
+async function readPage(pdfjs, pg) {
+  const H = pg.getViewport({ scale: 1 }).height;
+  const tc = await pg.getTextContent();
+  const toks = [];
+  for (const it of tc.items) {
+    const t = it.transform, s = it.str;
+    if (!s || !s.trim() || Math.abs(t[1]) > Math.abs(t[0]) * 0.1) continue; // skip rotated text
+    const h = Math.hypot(t[2], t[3]) || it.height || 8, x0 = t[4], y = H - t[5], cw = it.width / s.length;
+    for (const m of s.matchAll(/\S+/g)) toks.push({ s: m[0], x0: x0 + m.index * cw, x1: x0 + (m.index + m[0].length) * cw, y, h });
+  }
+  const O = pdfjs.OPS, ol = await pg.getOperatorList(), hr = [], vr = [], st = [];
+  let ctm = [1, 0, 0, 1, 0, 0];
+  const P = (x, y) => [ctm[0]*x + ctm[2]*y + ctm[4], H - (ctm[1]*x + ctm[3]*y + ctm[5])];
+  const seg = (a, b) => {
+    if (Math.abs(a[1] - b[1]) < 1.5 && Math.abs(a[0] - b[0]) > 5) hr.push({ y: (a[1] + b[1]) / 2, x0: Math.min(a[0], b[0]), x1: Math.max(a[0], b[0]) });
+    else if (Math.abs(a[0] - b[0]) < 1.5 && Math.abs(a[1] - b[1]) > 5) vr.push({ x: (a[0] + b[0]) / 2, y0: Math.min(a[1], b[1]), y1: Math.max(a[1], b[1]) });
+  };
+  for (let i = 0; i < ol.fnArray.length; i++) {
+    const f = ol.fnArray[i], a = ol.argsArray[i];
+    if (f === O.save) st.push(ctm);
+    else if (f === O.restore) ctm = st.pop() || ctm;
+    else if (f === O.transform) ctm = mul(ctm, a);
+    else if (f === O.constructPath) {
+      const [ops, args] = a; let k = 0, cur = null;
+      for (const op of ops) {
+        if (op === O.rectangle) {
+          const [x, y, w, h] = args.slice(k, k + 4); k += 4;
+          const p = [P(x, y), P(x + w, y), P(x + w, y + h), P(x, y + h)];
+          if (Math.abs(h) < 2) seg(P(x, y + h / 2), P(x + w, y + h / 2));      // thin filled rect = line
+          else if (Math.abs(w) < 2) seg(P(x + w / 2, y), P(x + w / 2, y + h));
+          else for (let j = 0; j < 4; j++) seg(p[j], p[(j + 1) % 4]);
+        } else if (op === O.moveTo) { cur = P(args[k], args[k + 1]); k += 2; }
+        else if (op === O.lineTo) { const q = P(args[k], args[k + 1]); k += 2; if (cur) seg(cur, q); cur = q; }
+        else if (op === O.curveTo) k += 6;
+        else if (op === O.curveTo2 || op === O.curveTo3) k += 4;
+      }
+    }
+  }
+  return { H, W: pg.getViewport({ scale: 1 }).width, toks, hr, vr };
+}
+
+// Tokens -> lines -> chunks (runs of close tokens, never crossing a vertical rule or joining two numbers).
+function toLines(page) {
+  const toks = page.toks.slice().sort((a, b) => a.y - b.y || a.x0 - b.x0), lines = [];
+  for (const t of toks) {
+    const L = lines[lines.length - 1];
+    if (L && t.y - L.y < 0.5 * Math.min(t.h, L.h)) L.toks.push(t); else lines.push({ y: t.y, h: t.h, toks: [t] });
+  }
+  for (const L of lines) {
+    L.toks.sort((a, b) => a.x0 - b.x0);
+    L.chunks = [];
+    for (const t of L.toks) {
+      const c = L.chunks[L.chunks.length - 1];
+      const ruleBetween = c && page.vr.some(v => v.x > c.x1 - 1 && v.x < t.x0 + 1 && v.y0 <= L.y && v.y1 >= L.y - L.h);
+      if (c && t.x0 - c.x1 < 0.5 * L.h && !ruleBetween && !(NUM.test(c.s) && NUM.test(t.s))) { c.s += (t.x0 - c.x1 < 0.12 * L.h ? "" : " ") + t.s; c.x1 = t.x1; c.toks.push(t); }
+      else L.chunks.push({ s: t.s, x0: t.x0, x1: t.x1, toks: [t] });
+    }
+  }
+  return lines;
+}
+
+// Keep Latin words plus digits/punctuation that sit next to Latin words (drops undecodable Indic glyph runs).
+function latinText(toks, h) {
+  const keep = toks.map(t => LATIN.test(t.s) && !NONLATIN_LETTER.test(t.s));
+  for (let pass = 0; pass < 2; pass++) for (let i = 0; i < toks.length; i++) {
+    if (keep[i] || NONLATIN_LETTER.test(toks[i].s)) continue;
+    const near = j => j >= 0 && j < toks.length && keep[j] && Math.abs((j < i ? toks[i].x0 - toks[j].x1 : toks[j].x0 - toks[i].x1)) < 1.2 * h;
+    if (near(i - 1) || near(i + 1)) keep[i] = true;
+  }
+  return joinToks(toks.filter((_, i) => keep[i]), h);
+}
+
+// join tokens, gluing pieces that touch (e.g. split ligatures "fi" + "ght")
+const joinToks = (toks, h) => toks.map((t, i) => (i && !(t.x0 - toks[i - 1].x1 >= -0.5 && t.x0 - toks[i - 1].x1 < 0.12 * h) ? " " : "") + t.s).join("");
+const normYear = s => s.replace(/(\d{4})\s*-\s*(?:\d{2})?(\d{2})\b/g, '$1-$2');
+const clean = s => normYear(s.replace(/\s+/g, ' ').trim());
+
+function analysePage(page, lines) {
+  const nums = [];
+  for (const L of lines) for (const c of L.chunks) if (NUM.test(c.s)) nums.push(c);
+  // columns = runs of horizontally overlapping numbers (works for left, right and centre aligned)
+  nums.sort((a, b) => a.x0 - b.x0);
+  let cl = [];
+  for (const c of nums) {
+    const k = cl[cl.length - 1];
+    if (k && c.x0 <= k.r + 1) { k.n++; k.r = Math.max(k.r, c.x1); }
+    else cl.push({ n: 1, l: c.x0, r: c.x1 });
+  }
+  const max = Math.max(0, ...cl.map(k => k.n));
+  cl = cl.filter(k => k.n >= 3 && k.n >= 0.15 * max);
+  // ponytail: a column of small sequence ints (1 2 3 / (1) (2)) only appears as a header numbering row; drop such lines
+  const colOf = c => cl.findIndex(k => c.x1 >= k.l - 4 && c.x0 <= k.r + 4);
+  const isColNumLine = L => L.chunks.length >= 3 && L.chunks.every(c => /^\(?\d{1,2}\)?$/.test(c.s));
+  for (const L of lines) {
+    L.colnum = isColNumLine(L);
+    L.vals = {}; L.text = [];
+    for (const c of L.chunks) {
+      const ci = (NUM.test(c.s) || NIL.test(c.s)) && !L.colnum ? colOf(c) : -1;
+      if (ci >= 0 && L.vals[ci] == null) L.vals[ci] = c.s; else L.text.push(...c.toks);
+    }
+    const n = Object.values(L.vals).filter(v => NUM.test(v));
+    // a lone small integer is usually header text ("column 3 & 4"), not a value
+    L.isData = !L.colnum && (n.length >= 2 || (n.length === 1 && /\d{3}|[.,]/.test(n[0])));
+  }
+  return cl;
+}
+
+function fullRule(page, y0, y1, tx0, tx1, minCover) {
+  const ys = [];
+  for (const r of page.hr) {
+    if (r.y <= y0 || r.y >= y1) continue;
+    let g = ys.find(g => Math.abs(g.y - r.y) < 2);
+    if (!g) ys.push(g = { y: r.y, segs: [] });
+    g.segs.push(r);
+  }
+  return ys.filter(g => {
+    const cov = g.segs.reduce((s, r) => s + Math.max(0, Math.min(r.x1, tx1) - Math.max(r.x0, tx0)), 0);
+    return cov >= minCover * (tx1 - tx0);
+  }).map(g => g.y).sort((a, b) => a - b);
+}
+
+// One table per page: header block above the first data line, data rows below it.
+// ponytail: one table per page; split pages into several regions if a doc packs multiple tables per page.
+function pageTable(page, lines, cols, runningSet, pageNo) {
+  lines = lines.filter(L => !runningSet.has(L));
+  const first = lines.findIndex(L => L.isData);
+  if (first < 0 || !cols.length) return null;
+  const dataToks = lines.slice(first).flatMap(L => L.toks);
+  const tx0 = Math.min(...dataToks.map(t => t.x0)), tx1 = Math.max(...cols.map(c => c.r));
+  const rulesIn = (a, b) => fullRule(page, a, b, tx0, tx1, 0.6);
+  const lh = lines[first].h;
+  const ruledTable = rulesIn(lines[first].y, page.H).length >= 2;
+
+  // in ruled tables the first row may have text above its numbers (vertically centred values): pull it in
+  let start = first;
+  while (ruledTable && start > 0 && !lines[start - 1].colnum && lines[start].y - lines[start - 1].y < 2 * lh &&
+         !rulesIn(lines[start - 1].y, lines[start].y - lines[start].h * 0.8).length) start--;
+
+  // header: walk up, skipping numbering rows; stop at a full-width rule once some header text is collected, or a big gap
+  const header = [];
+  for (let i = start - 1, below = lines[start]; i >= 0 && header.length < 15; below = lines[i--]) {
+    const L = lines[i], gap = below.y - L.y;
+    const ruled = rulesIn(L.y, below.y - below.h * 0.8).length > 0;
+    if (L.colnum) { header.length = 0; continue; } // numbering row marks the header bottom; anything below it is a section label
+    if (header.length && (ruled || gap > 3 * lh)) break;
+    if (!header.length && gap > 6 * lh) break;
+    header.unshift(L);
+  }
+  const label = c => clean(latinText(header.flatMap(L => L.chunks.filter(k => k.x1 >= c.l - 3 && k.x0 <= c.r + 3).flatMap(k => k.toks)), lh));
+  const labels = cols.map(label);
+  const titleLines = lines.slice(0, Math.max(0, lines.indexOf(header[0] || lines[start]))).map(L => clean(latinText(L.toks, L.h))).filter(Boolean);
+
+  // data region: through the last data line, plus trailing text until a rule or big gap
+  let last = first;
+  for (let i = first; i < lines.length; i++) if (lines[i].isData) last = i;
+  for (let i = last + 1; i < lines.length; i++) {
+    if (lines[i].y - lines[i - 1].y > 2.5 * lh || rulesIn(lines[i - 1].y, lines[i].y - lines[i].h * 0.8).length) break;
+    last = i;
+  }
+  const data = lines.slice(start, last + 1);
+
+  // rows: bands between full-width rules; inside a band a new row starts at each further data line
+  const rules = rulesIn(data[0].y - lh * 1.5, data[data.length - 1].y + lh);
+  const rows = [];
+  let cur = null, band = -1;
+  for (const L of data) {
+    const b = rules.filter(y => y < L.y - L.h * 0.8).length;
+    if (!cur || b !== band || (L.isData && cur.hasData)) { cur = { lines: [], hasData: false }; rows.push(cur); band = b; }
+    cur.lines.push(L);
+    if (L.isData) cur.hasData = true;
+  }
+  return {
+    pageNo, cols, labels, hasHeader: labels.some(Boolean), title: bestTitle(titleLines),
+    rows: rows.filter(r => r.hasData).map(r => {
+      const vals = cols.map((_, ci) => (r.lines.find(L => L.vals[ci] != null) || { vals: {} }).vals[ci] ?? '');
+      const all = r.lines.flatMap(L => L.toks);
+      const box = { x0: Math.min(...all.map(t => t.x0)), x1: Math.max(...all.map(t => t.x1)), y0: Math.min(...r.lines.map(L => L.y - L.h)), y1: Math.max(...r.lines.map(L => L.y)) + 2 };
+      return { page: pageNo, box, vals, latin: clean(r.lines.map(L => latinText(L.text, L.h)).join(' ')), all: clean(r.lines.map(L => joinToks(L.text, L.h)).join(" ")) };
+    }),
+  };
+}
+
+// the most descriptive nearby line, skipping unit notes like "(Rs. in thousand)"
+function bestTitle(lines) {
+  const cand = lines.slice(-4).map(l => l.replace(/^[^A-Za-z]*\]\s*·?\s*/, '').trim()).filter(l => !/^\W*\(?\s*(rs|₹)/i.test(l));
+  const letters = l => (l.match(/[A-Za-z]/g) || []).length;
+  return cand.sort((a, b) => letters(b) - letters(a))[0] || '';
+}
+
+async function extractTables(pdfjs, doc, onProgress) {
+  const pages = [];
+  for (let n = 1; n <= doc.numPages; n++) {
+    const page = await readPage(pdfjs, await doc.getPage(n));
+    page.lines = toLines(page);
+    page.cols = analysePage(page, page.lines);
+    pages.push(page);
+    onProgress && onProgress(n, doc.numPages);
+  }
+  // running headers/footers: same text in the top/bottom 12% of many pages, or a lone page number there
+  const key = L => L.toks.map(t => t.s).join(' ').replace(/\d+/g, '#');
+  const freq = new Map();
+  for (const p of pages) for (const k of new Set(p.lines.filter(L => L.y < p.H * 0.12 || L.y > p.H * 0.9).map(key))) freq.set(k, (freq.get(k) || 0) + 1);
+  const textOf = p => p.lines.map(L => L.toks.map(t => t.s).join(' ')).join('\n');
+  const tables = [];
+  pages.forEach((p, i) => {
+    const running = new Set(p.lines.filter(L => (L.y < p.H * 0.12 || L.y > p.H * 0.9) && (/^#$/.test(key(L)) || (pages.length >= 5 && freq.get(key(L)) >= pages.length * 0.3))));
+    const t = pageTable(p, p.lines, p.cols, running, i + 1);
+    if (!t || !t.rows.length) return;
+    const prev = tables[tables.length - 1];
+    // continuation = next page whose columns line up with the previous table's (labels may differ slightly)
+    const map = prev && prev.pages[prev.pages.length - 1] === i ? t.cols.map(c => {
+      const j = prev.cols.findIndex(pc => Math.abs(pc.r - c.r) < 12 || (c.l < pc.r && c.r > pc.l));
+      return j;
+    }) : [];
+    const matched = new Set(map.filter(j => j >= 0)).size;
+    const sim = (a, b) => { const A = labelTokens(a), B = labelTokens(b); return !A.size || !B.size || [...A].filter(w => B.has(w)).length >= Math.min(A.size, B.size) / 2; };
+    const cont = prev && matched >= Math.max(1, prev.cols.length - 1) && matched >= Math.min(prev.cols.length, t.cols.length) * 0.8 &&
+      map.every((j, k) => j < 0 || sim(t.labels[k], prev.labels[j]));
+    if (cont) {
+      prev.pages.push(i + 1);
+      prev.unit = prev.unit || detectUnit(textOf(p));
+      // ponytail: columns with no counterpart in the first page are dropped
+      for (const r of t.rows) { const v = prev.cols.map(() => ''); map.forEach((j, k) => { if (j >= 0 && !v[j]) v[j] = r.vals[k]; }); r.vals = v; prev.rows.push(r); }
+    } else tables.push({ id: tables.length, title: t.title || `Table on page ${i + 1}`, labels: t.labels.map((l, j) => l || `Column ${j + 1}`), cols: t.cols, pages: [i + 1], rows: t.rows, unit: detectUnit(textOf(p)) });
+  });
+  // entity: "Ministry/Department of ..." from repeated page headers, else from the first pages
+  const header = [...freq].filter(([, n]) => n >= pages.length * 0.3).map(([k]) => k).join('\n');
+  const entity = detectEntity(header) || detectEntity(pages.slice(0, 3).map(textOf).join('\n'));
+  return { tables, entity };
+}
+
+const UNITS = { rupees: 1, thousand: 1e3, lakh: 1e5, crore: 1e7 };
+function detectUnit(text) {
+  const m = text.match(/in\s*(thousands?|lakhs?|crores?)\b/i);
+  if (!m) return '';
+  const u = m[1].toLowerCase();
+  return /^th/.test(u) ? "thousand" : /^la/.test(u) ? 'lakh' : 'crore';
+}
+function detectEntity(text) {
+  const m = text.match(/\b((?:Ministry|Department|Directorate|Government) of [A-Za-z ,&'-]{3,80}?)(?=\s*(?:$|\n|\(|for\s+\d{4}|\d))/im) ||
+            text.match(/\b([A-Z][A-Za-z ,&]{3,60}? Department)\b/m);
+  return m ? m[1].trim().replace(/[ ,]+$/, '') : '';
+}
+
+// "10,11,297" / "(1,200)" / "..." -> number; anything else -> null
+function parseNum(s) {
+  if (!s || NIL.test(s)) return 0;
+  if (!NUM.test(s)) return null;
+  const neg = /^\(.*\)$/.test(s);
+  const v = parseFloat(s.replace(/[(),]/g, ''));
+  return neg ? -v : v;
+}
+const fmtNum = s => { const v = parseNum(s); return v == null ? s : v === 0 ? '-' : v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+
+function keywordMatcher(list) {
+  const kws = list.map(k => k.trim()).filter(Boolean);
+  const res = kws.map(k => {
+    const esc = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s*');
+    return new RegExp((/^[\x00-\x7f]+$/.test(k) ? '\\b' : '') + esc, 'i'); // word-start match for Latin keywords
+  });
+  return text => kws.filter((_, i) => res[i].test(text));
+}
+
+const labelTokens = s => new Set(normYear(s.toLowerCase()).split(/[^a-z0-9-]+/).filter(w => w.length > 2).map(w => w.replace(/s$/, '')));
+function bestColumn(name, labels) {
+  const want = labelTokens(name);
+  let best = -1, score = 0;
+  labels.forEach((l, i) => { const sc = [...labelTokens(l)].filter(w => want.has(w)).length; if (sc > score) { score = sc; best = i; } });
+  return best;
+}
+
+if (typeof module !== 'undefined') module.exports = { extractTables, keywordMatcher, fmtNum, parseNum, bestColumn, UNITS };
+</script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const ICON_COPY = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M11 3.5V3a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
+const ICON_EYE = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="2" fill="currentColor"/></svg>';
+const UNIT_NAMES = { '': 'unknown', rupees: 'rupees', thousand: 'thousands', lakh: 'lakhs', crore: 'crores' };
+
+let FILES = [], MATCHES = [], OUTCOLS = [];
+
+// ---------- wizard ----------
+const STEPS = ['s-upload', 's-tables', 's-search', 's-raw', 's-out'];
+let STEP = 0, MAX = 0;
+function show(n) {
+  STEP = n; MAX = Math.max(MAX, n);
+  STEPS.forEach((id, i) => $(id).hidden = i !== n);
+  document.querySelectorAll('#steps a').forEach(a => { const i = +a.dataset.step; a.classList.toggle('open', i <= MAX); a.classList.toggle('current', i === n); a.classList.toggle('done', i < MAX && i !== n); });
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (n === 4) renderBuilder();
+}
+document.querySelectorAll('#steps a').forEach(a => a.onclick = e => { e.preventDefault(); if (+a.dataset.step <= MAX) show(+a.dataset.step); });
+document.querySelectorAll('[data-next]').forEach(b => b.onclick = () => show(+b.dataset.next));
+// later steps depend on earlier choices: changing tables or keywords means searching again
+const resetFrom = n => { MAX = Math.min(MAX, n); show(STEP); };
+
+// ---------- keyword tags ----------
+const KW = { kw: ['hospital', 'health', 'medical', 'medicine', 'nursing', 'maternity', 'maternal', 'child care', 'cancer', 'oncology', 'covid', 'ICU', 'NICU', 'ventilator', 'diagnostic', 'disease', 'oxygen', 'mental', 'dental', 'drug', 'natal', 'clinic', 'paediatric', 'pediatric', 'ambulance', 'AIIMS', 'PHC', 'CHC'], xkw: ['veterinary'] };
+function renderTags(id) {
+  const box = $(id), input = box.querySelector('input');
+  box.querySelectorAll('.tag-chip').forEach(c => c.remove());
+  KW[id].forEach((w, i) => {
+    const c = document.createElement('span'); c.className = 'tag-chip';
+    c.innerHTML = `${esc(w)}<button type="button" aria-label="Remove ${esc(w)}">×</button>`;
+    c.querySelector('button').onclick = () => { KW[id].splice(i, 1); renderTags(id); resetFrom(2); };
+    box.insertBefore(c, input);
+  });
+}
+for (const id of ['kw', 'xkw']) {
+  const box = $(id), input = box.querySelector('input');
+  const add = text => { // pasting "a, b, c" adds three words
+    const words = text.split(/[,\n;]/).map(w => w.trim()).filter(w => w && !KW[id].some(k => k.toLowerCase() === w.toLowerCase()));
+    if (words.length) { KW[id].push(...words); renderTags(id); resetFrom(2); }
+  };
+  input.onkeydown = e => {
+    if ((e.key === 'Enter' || e.key === ',') && input.value.trim()) { e.preventDefault(); add(input.value); input.value = ''; }
+    else if (e.key === 'Backspace' && !input.value && KW[id].length) { KW[id].pop(); renderTags(id); }
+  };
+  input.onblur = () => { if (input.value.trim()) { add(input.value); input.value = ''; } };
+  input.onpaste = e => { const t = e.clipboardData.getData('text'); if (/[,\n;]/.test(t)) { e.preventDefault(); add(t); } };
+  box.onclick = e => { if (e.target === box) input.focus(); };
+  renderTags(id);
+}
+const allTables = () => FILES.flatMap(f => f.tables);
+const SEL = new Set();
+
+// ---------- 1. upload ----------
+$('file').onchange = e => loadFiles([...e.target.files]);
+const drop = $('drop');
+['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, () => drop.classList.remove('over')));
+drop.addEventListener('drop', e => { e.preventDefault(); loadFiles([...e.dataTransfer.files]); });
+
+async function loadFiles(list) {
+  const pdfs = list.filter(f => f.type === 'application/pdf' || /\.pdf$/i.test(f.name));
+  if (!pdfs.length) { $('status').textContent = 'Those files are not PDFs. Choose .pdf files.'; return; }
+  $('prog').hidden = false; document.body.classList.add('busy');
+  for (const [i, f] of pdfs.entries()) {
+    const tag = pdfs.length > 1 ? `File ${i + 1} of ${pdfs.length} · ` : '';
+    try {
+      const doc = await pdfjsLib.getDocument({ data: await f.arrayBuffer() }).promise;
+      const { tables, entity } = await extractTables(pdfjsLib, doc, (n, N) => {
+        $('prog').firstChild.style.transform = `scaleX(${n / N})`;
+        $('status').textContent = `${tag}${f.name} · page ${n} of ${N}`;
+      });
+      const file = { id: FILES.length ? FILES[FILES.length - 1].id + 1 : 0, name: f.name, doc, entity, pages: doc.numPages, tables };
+      tables.forEach(t => { t.file = file; t.uid = file.id + ':' + t.id; t.unitDetected = t.unit; });
+      FILES.push(file);
+    } catch (err) { toast(`Could not read ${f.name}: ${err.message}`); }
+  }
+  $('prog').hidden = true; document.body.classList.remove('busy');
+  const n = allTables().length;
+  $('status').textContent = n ? `Ready: ${n} tables found in ${FILES.length} file${FILES.length === 1 ? '' : 's'}.` : 'No tables found. Scanned (image) PDFs need OCR, which isn\'t supported yet.';
+  renderFiles(); renderTables();
+}
+
+function renderFiles() {
+  document.querySelector('[data-next="1"]').disabled = !allTables().length;
+  $('files').innerHTML = FILES.length ? `<div class="scroll" style="max-height:none"><table><thead><tr><th>File</th><th>Pages</th><th>Tables</th><th>Organisation (Entity)</th><th></th></tr></thead><tbody>
+    ${FILES.map(f => `<tr><td><b>${esc(f.name)}</b></td><td class="num">${f.pages}</td><td class="num">${f.tables.length}</td>
+      <td><input type="text" data-entity="${f.id}" value="${esc(f.entity)}" placeholder="Type the ministry, department or state"></td>
+      <td><button class="icon" data-rm="${f.id}" aria-label="Remove ${esc(f.name)}">✕</button></td></tr>`).join('')}
+    </tbody></table></div>` : '';
+  $('files').querySelectorAll('[data-entity]').forEach(i => i.oninput = () => { FILES.find(f => f.id === +i.dataset.entity).entity = i.value; renderOut(); });
+  $('files').querySelectorAll('[data-rm]').forEach(b => b.onclick = () => {
+    const f = FILES.find(f => f.id === +b.dataset.rm);
+    f.tables.forEach(t => SEL.delete(t.uid)); FILES = FILES.filter(x => x !== f);
+    renderFiles(); renderTables(); resetFrom(0);
+    $('status').textContent = FILES.length ? `${allTables().length} tables in ${FILES.length} files.` : '';
+  });
+}
+
+// ---------- 2. tables ----------
+const tableText = t => (t.file.name + ' ' + t.title + ' ' + t.labels.join(' ')).toLowerCase();
+const shownTables = () => { const q = $('tfilter').value.trim().toLowerCase(); return allTables().filter(t => !q || tableText(t).includes(q)); };
+const pagesOf = t => t.pages[0] + (t.pages.length > 1 ? '–' + t.pages[t.pages.length - 1] : '');
+function renderTables() {
+  const list = shownTables();
+  $('tables').innerHTML = list.length ? list.map(t => `<label class="titem"><input type="checkbox" class="tsel" value="${t.uid}" ${SEL.has(t.uid) ? 'checked' : ''}>
+    <div><div class="t">${esc(t.title)}</div>
+      <div class="meta">${FILES.length > 1 ? esc(t.file.name) + ' · ' : ''}pages ${pagesOf(t)} · ${t.rows.length} rows · amounts in ${UNIT_NAMES[t.unit]}</div>
+      <details><summary>Columns, sample rows and unit</summary><div>
+        ${t.labels.map(l => `<span class="chip">${esc(l)}</span>`).join('')}
+        <p class="muted" style="margin:8px 0">${t.rows.slice(0, 3).map(r => esc((r.latin || r.all).slice(0, 120))).join('<br>')}</p>
+        Amounts are in <select data-unit="${t.uid}" aria-label="Unit">${Object.keys(UNIT_NAMES).map(u => `<option value="${u}" ${u === t.unit ? 'selected' : ''}>${UNIT_NAMES[u]}</option>`).join('')}</select>
+      </div></details></div></label>`).join('') : `<div class="empty">No tables match “${esc($('tfilter').value)}”.</div>`;
+  document.querySelectorAll('.tsel').forEach(c => c.onchange = () => { c.checked ? SEL.add(c.value) : SEL.delete(c.value); selCount(); resetFrom(1); });
+  document.querySelectorAll('[data-unit]').forEach(s => { s.onclick = e => e.stopPropagation(); s.onchange = () => { byUid(s.dataset.unit).unit = s.value; renderTables(); renderOut(); }; });
+  selCount();
+}
+function selCount() {
+  const n = [...SEL].filter(byUid).length;
+  $('selcount').textContent = n ? `${n} table${n === 1 ? '' : 's'} ticked` : 'Tick at least one table';
+  $('to-kw').disabled = !n;
+}
+const byUid = uid => allTables().find(t => t.uid === uid);
+$('tfilter').oninput = renderTables;
+$('all').onclick = () => { shownTables().forEach(t => SEL.add(t.uid)); renderTables(); resetFrom(1); };
+$('none').onclick = () => { SEL.clear(); renderTables(); resetFrom(1); };
+
+// ---------- 3–4. search + review ----------
+const desc = r => $('latin').checked ? r.latin : r.all;
+function rowFlags(t, r) {
+  const f = [], d = desc(r);
+  if (!d) f.push('No description');
+  else if (d.split(/\s+/).length < 3) f.push('Short description');
+  if (r.vals.every(v => !v)) f.push('No values');
+  if (r.vals.some(v => v && parseNum(v) == null)) f.push('Unreadable number');
+  if (!t.unit) f.push('Unit unknown');
+  return f;
+}
+$('go').onclick = () => {
+  const tabs = allTables().filter(t => SEL.has(t.uid));
+  if (!tabs.length) { toast('Tick at least one table first.'); show(1); return; }
+  if (!KW.kw.length) { toast('Add at least one word to include.'); $('kw-in').focus(); return; }
+  const inc = keywordMatcher(KW.kw), exc = keywordMatcher(KW.xkw);
+  MATCHES = tabs.map(t => ({ t, rows: t.rows.map(r => ({ r, k: inc(desc(r)), x: exc(desc(r)) })).filter(m => m.k.length)
+    .map(m => ({ ...m, on: !m.x.length, flags: rowFlags(t, m.r) })) })).filter(m => m.rows.length);
+  renderRaw();
+  if (!OUTCOLS.length) presetSample();
+  show(3);
+};
+const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const hl = (s, k) => k.length ? esc(s).replace(new RegExp('\\b(' + k.map(w => reEsc(esc(w)).replace(/\s+/g, '\\s*')).join('|') + ')', 'ig'), '<mark>$1</mark>') : esc(s);
+const flagChips = f => f.map(x => `<span class="flag">${esc(x)}</span>`).join('');
+function renderRaw() {
+  const all = MATCHES.flatMap(m => m.rows);
+  $('summary').innerHTML = MATCHES.length
+    ? `<span><b>${all.length}</b> rows found</span><span><b>${all.filter(x => x.on).length}</b> kept</span><span><b>${all.filter(x => x.flags.length).length}</b> to check</span>${all.some(x => x.x.length) ? `<span><b>${all.filter(x => x.x.length).length}</b> left out by your exclude words</span>` : ''}`
+    : '<span>No rows found. Go back and add more words or tick more tables.</span>';
+  $('raw').innerHTML = MATCHES.map((m, i) => `<div class="tbl-title">${esc(m.t.title)} <span class="count">${m.rows.length} rows · pages ${pagesOf(m.t)}${FILES.length > 1 ? ' · ' + esc(m.t.file.name) : ''}</span>
+      <span class="spacer"></span><button class="ghost sm" data-copy="${i}">${ICON_COPY} Copy these rows</button></div>
+    <div class="scroll"><table><thead><tr><th><input type="checkbox" data-allon="${i}" ${m.rows.every(x => x.on) ? 'checked' : ''} aria-label="Keep all rows"></th><th>Description</th>${m.t.labels.map(l => `<th>${esc(l)}</th>`).join('')}<th></th></tr></thead><tbody>
+    ${m.rows.map((x, j) => `<tr class="${x.on ? '' : 'off'}"><td><input type="checkbox" data-on="${i}:${j}" ${x.on ? 'checked' : ''} aria-label="Keep row"></td>
+      <td>${hl(desc(x.r), x.k)}${x.x.length ? `<div><span class="flag">left out: mentions ${esc(x.x.join(', '))}</span></div>` : ''}${x.flags.length ? `<div>${x.flags.map(f => `<span class="flag">check: ${esc(f.toLowerCase())}</span>`).join('')}</div>` : ''}</td>
+      ${x.r.vals.map(v => `<td class="num">${esc(v)}</td>`).join('')}<td class="view"><button class="link" data-view="${i}:${j}">${ICON_EYE} view p.${x.r.page}</button></td></tr>`).join('')}
+    </tbody></table></div>`).join('');
+  $('raw').querySelectorAll('[data-on]').forEach(c => c.onchange = () => { const [i, j] = c.dataset.on.split(':'); MATCHES[i].rows[j].on = c.checked; c.closest('tr').classList.toggle('off', !c.checked); renderSummaryAndOut(); });
+  $('raw').querySelectorAll('[data-allon]').forEach(c => c.onchange = () => { MATCHES[c.dataset.allon].rows.forEach(x => x.on = c.checked); renderRaw(); renderOut(); });
+  $('raw').querySelectorAll('[data-view]').forEach(b => b.onclick = () => { const [i, j] = b.dataset.view.split(':'); view(MATCHES[i].t, MATCHES[i].rows[j].r); });
+  $('raw').querySelectorAll('[data-copy]').forEach(b => b.onclick = () => {
+    const m = MATCHES[+b.dataset.copy], rows = m.rows.filter(x => x.on);
+    copyRows([['Page', 'Keywords', 'Description', ...m.t.labels], ...rows.map(x => [x.r.page, x.k.join(', '), desc(x.r), ...x.r.vals])], `Copied ${rows.length} rows with headers`);
+  });
+}
+function renderSummaryAndOut() {
+  const all = MATCHES.flatMap(m => m.rows);
+  if ($('summary').children[1]) $('summary').children[1].innerHTML = `<b>${all.filter(x => x.on).length}</b> kept`;
+  renderOut();
+}
+
+// ---------- 5. output builder ----------
+const FIELDS = { entity: 'Entity', description: 'Description', file: 'File', table: 'Table', page: 'Page', keywords: 'Keywords', unit: 'Unit', flags: 'Flags' };
+const normLabel = l => [...labelTokens(l)].join(' ');
+function sourceLabels() { // value columns across the matched tables, merged when the labels mean the same thing
+  const seen = new Map();
+  for (const m of MATCHES) for (const l of m.t.labels) { const k = normLabel(l) || l; if (!seen.has(k)) seen.set(k, l); }
+  return [...seen.values()];
+}
+const valueCol = label => ({ type: 'value', label, name: label, map: Object.fromEntries(MATCHES.map(m => [m.t.uid, bestColumn(label, m.t.labels)])) });
+// "Actual expenditure to the end of 2024-" -> "Actual 2024-25"
+const shortName = l => { const m = l.match(/\b(actual|budget|revised|probable)\b.*?\b(\d{4})/i); return m ? `${m[1][0].toUpperCase() + m[1].slice(1).toLowerCase()} ${m[2]}-${String((+m[2] + 1) % 100).padStart(2, '0')}` : l; };
+function presetSample() {
+  const labels = sourceLabels();
+  const actual = labels.find(l => /actual/i.test(l)) || labels[0];
+  OUTCOLS = [{ type: 'field', key: 'entity', name: 'Entity' }, { type: 'field', key: 'description', name: 'Description' }];
+  if (actual) OUTCOLS.push({ ...valueCol(actual), name: shortName(actual) });
+}
+$('preset-sample').onclick = () => { presetSample(); renderBuilder(); };
+$('preset-all').onclick = () => {
+  OUTCOLS = ['entity', 'description', 'page'].map(k => ({ type: 'field', key: k, name: FIELDS[k] })).concat(sourceLabels().map(valueCol));
+  renderBuilder();
+};
+$('addcol').onchange = () => {
+  const v = $('addcol').value; if (!v) return;
+  const [kind, key] = [v.slice(0, 2), v.slice(2)];
+  OUTCOLS.push(kind === 'f:' ? { type: 'field', key, name: FIELDS[key] } : valueCol(sourceLabels()[+key]));
+  renderBuilder();
+};
+function renderBuilder() {
+  // keep mappings for tables added since the column was created
+  OUTCOLS.filter(c => c.type === 'value').forEach(c => MATCHES.forEach(m => { if (!(m.t.uid in c.map)) c.map[m.t.uid] = bestColumn(c.label, m.t.labels); }));
+  $('ocols').innerHTML = OUTCOLS.map((c, i) => `<div class="ocol ${c.type}">
+      <span class="kind">${c.type === 'value' ? 'amount' : 'info'}</span>
+      <input type="text" data-name="${i}" value="${esc(c.name)}" aria-label="Column header">
+      <button class="icon" data-mv="${i}:-1" aria-label="Move left" ${i ? '' : 'disabled'}>‹</button><button class="icon" data-mv="${i}:1" aria-label="Move right" ${i < OUTCOLS.length - 1 ? '' : 'disabled'}>›</button><button class="icon" data-del="${i}" aria-label="Remove column">✕</button>
+    </div>`).join('') || '<span class="muted">No columns yet. Add one below.</span>';
+  $('addcol').innerHTML = `<option value="">+ Add a column…</option><optgroup label="Row information">${Object.entries(FIELDS).map(([k, n]) => `<option value="f:${k}">${n}</option>`).join('')}</optgroup>
+    <optgroup label="Amounts from the PDF tables">${sourceLabels().map((l, i) => `<option value="v:${i}">${esc(l)}</option>`).join('')}</optgroup>`;
+  $('ocols').querySelectorAll('[data-name]').forEach(inp => inp.oninput = () => { OUTCOLS[+inp.dataset.name].name = inp.value; renderOut(); });
+  $('ocols').querySelectorAll('[data-mv]').forEach(b => b.onclick = () => { const [i, d] = b.dataset.mv.split(':').map(Number); [OUTCOLS[i], OUTCOLS[i + d]] = [OUTCOLS[i + d], OUTCOLS[i]]; renderBuilder(); });
+  $('ocols').querySelectorAll('[data-del]').forEach(b => b.onclick = () => { OUTCOLS.splice(+b.dataset.del, 1); renderBuilder(); });
+  const vcols = OUTCOLS.map((c, i) => [c, i]).filter(([c]) => c.type === 'value');
+  $('mapwrap').hidden = !vcols.length || !MATCHES.length;
+  $('mapwrap').querySelector('summary').textContent = `Which PDF column fills ${vcols.length === 1 ? '“' + vcols[0][0].name + '”' : 'each amount column'} (${MATCHES.length} table${MATCHES.length === 1 ? '' : 's'})`;
+  $('map-h').innerHTML = `<tr><th>Table</th>${vcols.map(([c]) => `<th>${esc(c.name)}</th>`).join('')}</tr>`;
+  $('map').innerHTML = MATCHES.map(m => `<tr><td>${esc(m.t.title)} <span class="muted">· ${esc(m.t.file.name)}</span></td>${vcols.map(([c, i]) =>
+    `<td><select data-map="${i}" data-t="${m.t.uid}"><option value="-1">(leave blank)</option>${m.t.labels.map((l, k) => `<option value="${k}" ${k === c.map[m.t.uid] ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></td>`).join('')}</tr>`).join('');
+  $('map').querySelectorAll('[data-map]').forEach(s => s.onchange = () => { OUTCOLS[+s.dataset.map].map[s.dataset.t] = +s.value; renderOut(); });
+  renderOut();
+}
+
+// cell value: { v: number|null (for Excel), s: display string }
+function cellOf(c, m, x) {
+  const t = m.t, r = x.r;
+  if (c.type === 'field') {
+    const s = { entity: ($('prefix').value || '') + (t.file.entity || ''), description: desc(r), file: t.file.name, table: t.title, page: r.page,
+      keywords: x.k.join(', '), unit: UNIT_NAMES[$('unit').value || t.unit], flags: x.flags.join('; ') }[c.key];
+    return { v: c.key === 'page' ? r.page : null, s: String(s ?? '') };
+  }
+  const k = c.map[t.uid], raw = k >= 0 ? r.vals[k] : '';
+  let v = parseNum(raw);
+  if (v == null) return { v: null, s: raw };
+  const target = $('unit').value;
+  if (target && t.unit) v = v * UNITS[t.unit] / UNITS[target];
+  v = Math.round(v * 1e6) / 1e6;
+  const s = $('fmt').checked ? (v === 0 ? '-' : v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })) : (target ? String(v) : raw || '');
+  return { v, s };
+}
+function outData() {
+  const rows = [];
+  for (const m of MATCHES) for (const x of m.rows) if (x.on) {
+    const blank = OUTCOLS.filter(c => c.type === 'value' && !(x.r.vals[c.map[m.t.uid]] ?? '')).map(c => 'Blank ' + c.name);
+    if ($('unit').value && !m.t.unit) blank.push('Not converted: unit unknown');
+    const xx = blank.length ? { ...x, flags: [...x.flags, ...blank] } : x;
+    rows.push({ m, x: xx, cells: OUTCOLS.map(c => cellOf(c, m, xx)) });
+  }
+  return rows;
+}
+let OUT = [];
+function renderOut() {
+  OUT = outData();
+  const nf = OUT.filter(o => o.x.flags.length).length;
+  $('out-count').textContent = `${OUT.length} rows${nf ? ` · ${nf} to check` : ''}`;
+  $('out').innerHTML = `<thead><tr>${OUTCOLS.map((c, i) => `<th><span class="th">${esc(c.name)}<button class="icon sm" data-ccol="${i}" aria-label="Copy column ${esc(c.name)}">${ICON_COPY}</button></span></th>`).join('')}<th></th></tr></thead>
+    <tbody>${OUT.map((o, i) => `<tr class="${o.x.flags.length ? 'flagged' : ''}">${o.cells.map((c, j) => `<td class="${OUTCOLS[j].type === 'value' || OUTCOLS[j].key === 'page' ? 'num' : ''} cell" data-cell="${i}:${j}" title="${o.x.flags.length ? esc(o.x.flags.join('; ')) : 'Click to copy'}">${esc(c.s)}</td>`).join('')}
+      <td class="acts"><button class="icon sm" data-crow="${i}" aria-label="Copy row">${ICON_COPY}</button><button class="icon sm" data-oview="${i}" aria-label="View in PDF">${ICON_EYE}</button></td></tr>`).join('')}</tbody>`;
+  $('out').querySelectorAll('[data-ccol]').forEach(b => b.onclick = () => { const j = +b.dataset.ccol; copyRows(OUT.map(o => [o.cells[j].s]), `Copied column “${OUTCOLS[j].name}” (${OUT.length} values)`); });
+  $('out').querySelectorAll('[data-crow]').forEach(b => b.onclick = () => copyRows([OUT[+b.dataset.crow].cells.map(c => c.s)], 'Copied 1 row'));
+  $('out').querySelectorAll('[data-oview]').forEach(b => b.onclick = () => { const o = OUT[+b.dataset.oview]; view(o.m.t, o.x.r); });
+  $('out').querySelectorAll('[data-cell]').forEach(td => td.onclick = () => { const [i, j] = td.dataset.cell.split(':').map(Number); copyRows([[OUT[i].cells[j].s]], 'Copied cell'); });
+}
+['fmt', 'unit', 'latin'].forEach(id => $(id).addEventListener('change', () => { if (id === 'latin' && MATCHES.length) renderRaw(); renderOut(); }));
+$('prefix').oninput = renderOut;
+const header = () => OUTCOLS.map(c => c.name);
+$('copy-out').onclick = () => copyRows([header(), ...OUT.map(o => o.cells.map(c => c.s))], `Copied ${OUT.length} rows with headers`);
+$('csv-out').onclick = () => {
+  const q = v => /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  const csv = [header(), ...OUT.map(o => o.cells.map(c => c.s))].map(r => r.map(v => q(String(v))).join(',')).join('\r\n');
+  save(new Blob(['﻿' + csv], { type: 'text/csv' }), 'extracted-rows.csv');
+};
+$('xlsx-out').onclick = () => {
+  if (!window.XLSX) { toast('Excel export needs an internet connection to load. Use CSV instead.'); return; }
+  const wb = XLSX.utils.book_new(), numFmt = $('fmt').checked ? '#,##0.00;-#,##0.00;"-"' : 'General';
+  const sheet = rows => {
+    const aoa = [header(), ...rows.map(o => o.cells.map(c => c.v != null ? c.v : c.s))];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    rows.forEach((o, i) => o.cells.forEach((c, j) => { if (c.v != null && OUTCOLS[j].type === 'value') ws[XLSX.utils.encode_cell({ r: i + 1, c: j })].z = numFmt; }));
+    ws['!cols'] = OUTCOLS.map(c => ({ wch: c.key === 'description' ? 70 : c.key === 'entity' ? 40 : 18 }));
+    ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: rows.length, c: Math.max(0, OUTCOLS.length - 1) } }) };
+    return ws;
+  };
+  const used = new Set(), name = s => { let n = s.replace(/[\\/?*[\]:]/g, ' ').replace(/\.pdf$/i, '').slice(0, 28) || 'Sheet', k = n, i = 2; while (used.has(k.toLowerCase())) k = n.slice(0, 25) + ' ' + i++; used.add(k.toLowerCase()); return k; };
+  XLSX.utils.book_append_sheet(wb, sheet(OUT), name('All rows'));
+  if (FILES.length > 1) for (const f of FILES) { const rows = OUT.filter(o => o.m.t.file === f); if (rows.length) XLSX.utils.book_append_sheet(wb, sheet(rows), name(f.entity || f.name)); }
+  XLSX.writeFile(wb, 'extracted-rows.xlsx');
+  toast(`Downloaded ${OUT.length} rows to Excel`);
+};
+
+// ---------- PDF viewer ----------
+let VIEW = null;
+async function view(t, r, page = r.page) {
+  VIEW = { t, r, page };
+  $('vtitle').textContent = `${t.file.name} · ${t.title}`;
+  $('vpage').textContent = `Page ${page} of ${t.file.pages}`;
+  $('vprev').disabled = page <= 1; $('vnext').disabled = page >= t.file.pages;
+  if (!$('viewer').open) $('viewer').showModal();
+  const pg = await t.file.doc.getPage(page), base = pg.getViewport({ scale: 1 });
+  const scale = Math.min(2, ($('viewer').querySelector('.vbody').clientWidth - 32) / base.width), vp = pg.getViewport({ scale });
+  const cv = $('vcanvas'), dpr = window.devicePixelRatio || 1;
+  cv.width = vp.width * dpr; cv.height = vp.height * dpr; cv.style.width = vp.width + 'px'; cv.style.height = vp.height + 'px';
+  await pg.render({ canvasContext: cv.getContext('2d'), viewport: vp, transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null }).promise;
+  const hlb = $('vhl'), b = r.box;
+  hlb.hidden = page !== r.page || !b;
+  if (!hlb.hidden) {
+    Object.assign(hlb.style, { left: (b.x0 - 4) * scale + 'px', top: (b.y0 - 3) * scale + 'px', width: (b.x1 - b.x0 + 8) * scale + 'px', height: (b.y1 - b.y0 + 6) * scale + 'px' });
+    const vb = $('viewer').querySelector('.vbody'); vb.scrollTop = Math.max(0, b.y0 * scale - vb.clientHeight / 2);
+  }
+}
+$('vclose').onclick = () => $('viewer').close();
+$('vprev').onclick = () => view(VIEW.t, VIEW.r, VIEW.page - 1);
+$('vnext').onclick = () => view(VIEW.t, VIEW.r, VIEW.page + 1);
+$('viewer').addEventListener('click', e => { if (e.target === $('viewer')) $('viewer').close(); });
+
+// ---------- helpers ----------
+function save(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); toast('Downloaded ' + name); }
+let toastTimer;
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 1800); }
+function copyRows(rows, msg) {
+  const tsv = rows.map(r => r.map(v => String(v).replace(/[\t\n\r]+/g, ' ')).join('\t')).join('\n');
+  const ok = () => toast(msg);
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(tsv).then(ok, () => fallbackCopy(tsv, ok)); else fallbackCopy(tsv, ok);
+}
+function fallbackCopy(text, done) { // file:// pages may not get clipboard API access
+  const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select();
+  document.execCommand('copy'); ta.remove(); done();
+}
+show(0);
+</script>
+</body>
+</html>
