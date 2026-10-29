@@ -211,7 +211,7 @@
   <section id="s-tables" class="step" hidden>
     <div class="eyebrow">Step 2 of 5</div>
     <h2>Which tables should be searched?</h2>
-    <p class="hint">Tick the tables that hold the figures you report. Tables spanning several pages are already joined.</p>
+    <p class="hint">Tick the tables that hold the figures you report. Tables spanning several pages are already joined. In budget books each Major Head (e.g. "Grants-in-aid to State Governments") is its own table. If a unit says <i>assumed</i>, the PDF didn't state it on that page, so check it against the PDF.</p>
     <div class="searchbox"><input type="text" id="tfilter" placeholder="Search tables, e.g. works, actual expenditure, Assam"><button class="ghost sm" id="all">Tick all shown</button><button class="ghost sm" id="none">Untick all</button></div>
     <div id="tables" class="tlist"></div>
     <div class="nav"><button class="ghost" data-next="0">Back</button><span class="count" id="selcount"></span><button data-next="2" id="to-kw" disabled>Next: keywords</button></div>
@@ -220,7 +220,7 @@
   <section id="s-search" class="step" hidden>
     <div class="eyebrow">Step 3 of 5</div>
     <h2>What should the rows mention?</h2>
-    <p class="hint">A row is picked up when its description contains any of these words. Press Enter to add a word.</p>
+    <p class="hint">A row is picked up when its description, or a heading above it, contains any of these words. For example, <i>health</i> also finds the "Charged" row under "Grants for Health Sector". Press Enter to add a word.</p>
     <label for="kw-in">Include rows that mention</label>
     <div class="tags" id="kw"><input id="kw-in" placeholder="Add a word, e.g. hospital"></div>
     <label for="xkw-in">Leave out rows that mention</label>
@@ -235,6 +235,7 @@
     <div class="eyebrow">Step 4 of 5</div>
     <h2>Check the rows found</h2>
     <p class="hint">Untick anything you don't want. Rows marked <span class="flag">check</span> may need a second look. Click <b>view</b> to see a row in the PDF.</p>
+    <p class="hint">The small grey line above a description shows the headings the row sits under. <b>Total</b> rows add up the rows above them, and rows marked <i>has breakdown</i> are split into Voted/Charged rows below. Keep one level, or you'll count the same money twice.</p>
     <div id="summary" class="summary"></div>
     <div id="raw"></div>
     <div class="nav"><button class="ghost" data-next="2">Back</button><span></span><button data-next="4">Next: export</button></div>
@@ -243,7 +244,7 @@
   <section id="s-out" class="step" hidden>
     <div class="eyebrow">Step 5 of 5</div>
     <h2>Export</h2>
-    <p class="hint">These are the columns of your sheet. Rename a header by typing in it, use the arrows to reorder.</p>
+    <p class="hint">These are the columns of your sheet. Rename a header by typing in it, and use the arrows to reorder. <b>Parent headings</b> tells you which heading a row like "Charged" belongs to, and <b>Description</b> is the row's own text.</p>
     <div id="ocols" class="ocols"></div>
     <div class="row"><select id="addcol" aria-label="Add a column"></select></div>
     <details class="more" id="mapwrap"><summary>Which source column fills each value column</summary>
@@ -257,7 +258,7 @@
           <select id="unit"><option value="">the PDF's own unit</option><option value="rupees">rupees</option><option value="thousand">thousands</option><option value="lakh">lakhs</option><option value="crore">crores</option></select></label>
         <label class="check" style="margin:0"><input type="checkbox" id="fmt" checked> Write amounts as 1,234.00 and zero as -</label>
       </div>
-      <div class="row"><span class="muted">Start over with:</span><button class="ghost sm" id="preset-sample">Entity, Description, Actual</button><button class="ghost sm" id="preset-all">Every column</button></div>
+      <div class="row"><span class="muted">Start over with:</span><button class="ghost sm" id="preset-sample">Standard columns</button><button class="ghost sm" id="preset-all">Every column</button></div>
     </details>
     <div class="exportbar">
       <button id="xlsx-out">Download Excel</button><button class="ghost" id="copy-out">Copy all</button><button class="ghost sm" id="csv-out">CSV</button>
@@ -282,11 +283,13 @@
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <script id="core">
+
 // ---- PDF table extraction core (no DOM). Needs a pdfjs object exposing OPS. ----
 const NUM = /^\(?-?\d[\d,]*(\.\d+)?\)?$/;
 const NIL = /^(\.{2,}|…|-|–|—|nil)$/i;
 // ponytail: "readable" = ASCII letters; legacy Indic fonts map glyphs onto Latin-Extended codepoints, so those count as noise
 const LATIN = /[A-Za-z]/;
+const CODE = /^(0\d[\d.]*|\d+\.\d+\.\d+)$/;
 const NONLATIN_LETTER = /[^\P{L}A-Za-z]|[\p{M}\u{E000}-\u{F8FF}]/u;
 
 function mul(m, n) {
@@ -295,18 +298,19 @@ function mul(m, n) {
 
 // Text tokens + ruling segments for one page, in top-down coordinates.
 async function readPage(pdfjs, pg) {
-  const H = pg.getViewport({ scale: 1 }).height;
+  // work in display space (viewport transform = page /Rotate + y-flip), so rotated pages read upright
+  const vp = pg.getViewport({ scale: 1 }), H = vp.height;
   const tc = await pg.getTextContent();
   const toks = [];
   for (const it of tc.items) {
-    const t = it.transform, s = it.str;
-    if (!s || !s.trim() || Math.abs(t[1]) > Math.abs(t[0]) * 0.1) continue; // skip rotated text
-    const h = Math.hypot(t[2], t[3]) || it.height || 8, x0 = t[4], y = H - t[5], cw = it.width / s.length;
+    const t = mul(vp.transform, it.transform), s = it.str;
+    if (!s || !s.trim() || t[0] <= 0 || Math.abs(t[1]) > t[0] * 0.1) continue; // skip text that is still rotated on screen
+    const h = Math.hypot(t[2], t[3]) || it.height || 8, x0 = t[4], y = t[5], cw = it.width / s.length;
     for (const m of s.matchAll(/\S+/g)) toks.push({ s: m[0], x0: x0 + m.index * cw, x1: x0 + (m.index + m[0].length) * cw, y, h });
   }
   const O = pdfjs.OPS, ol = await pg.getOperatorList(), hr = [], vr = [], st = [];
-  let ctm = [1, 0, 0, 1, 0, 0];
-  const P = (x, y) => [ctm[0]*x + ctm[2]*y + ctm[4], H - (ctm[1]*x + ctm[3]*y + ctm[5])];
+  let ctm = vp.transform;
+  const P = (x, y) => [ctm[0]*x + ctm[2]*y + ctm[4], ctm[1]*x + ctm[3]*y + ctm[5]];
   const seg = (a, b) => {
     if (Math.abs(a[1] - b[1]) < 1.5 && Math.abs(a[0] - b[0]) > 5) hr.push({ y: (a[1] + b[1]) / 2, x0: Math.min(a[0], b[0]), x1: Math.max(a[0], b[0]) });
     else if (Math.abs(a[0] - b[0]) < 1.5 && Math.abs(a[1] - b[1]) > 5) vr.push({ x: (a[0] + b[0]) / 2, y0: Math.min(a[1], b[1]), y1: Math.max(a[1], b[1]) });
@@ -332,7 +336,7 @@ async function readPage(pdfjs, pg) {
       }
     }
   }
-  return { H, W: pg.getViewport({ scale: 1 }).width, toks, hr, vr };
+  return { H, W: vp.width, toks, hr, vr };
 }
 
 // Tokens -> lines -> chunks (runs of close tokens, never crossing a vertical rule or joining two numbers).
@@ -357,6 +361,7 @@ function toLines(page) {
 
 // Keep Latin words plus digits/punctuation that sit next to Latin words (drops undecodable Indic glyph runs).
 function latinText(toks, h) {
+  if (!toks.some(t => NONLATIN_LETTER.test(t.s))) return joinToks(toks, h);
   const keep = toks.map(t => LATIN.test(t.s) && !NONLATIN_LETTER.test(t.s));
   for (let pass = 0; pass < 2; pass++) for (let i = 0; i < toks.length; i++) {
     if (keep[i] || NONLATIN_LETTER.test(toks[i].s)) continue;
@@ -373,7 +378,8 @@ const clean = s => normYear(s.replace(/\s+/g, ' ').trim());
 
 function analysePage(page, lines) {
   const nums = [];
-  for (const L of lines) for (const c of L.chunks) if (NUM.test(c.s)) nums.push(c);
+  const isColNumLine = L => L.chunks.length >= 3 && L.chunks.every(c => /^\(?\d{1,2}\)?$/.test(c.s));
+  for (const L of lines) if (!isColNumLine(L)) for (const c of L.chunks) if (NUM.test(c.s) || CODE.test(c.s) || (NIL.test(c.s) && c.s.length > 1)) nums.push(c);
   // columns = runs of horizontally overlapping numbers (works for left, right and centre aligned)
   nums.sort((a, b) => a.x0 - b.x0);
   let cl = [];
@@ -384,9 +390,18 @@ function analysePage(page, lines) {
   }
   const max = Math.max(0, ...cl.map(k => k.n));
   cl = cl.filter(k => k.n >= 3 && k.n >= 0.15 * max);
+  // head/account codes (01, 07.106, 02.00.31): leading zeros or several dots, never thousands commas -> text, not amounts
+  // (or left-aligned like text while amounts align right)
+  const spread = a => Math.max(...a) - Math.min(...a);
+  const codeCols = cl.filter(k => {
+    const cs = nums.filter(c => c.x1 >= k.l && c.x0 <= k.r && !NIL.test(c.s)), v = cs.map(c => c.s);
+    if (!v.length || v.some(x => x.includes(','))) return false;
+    return v.filter(x => CODE.test(x)).length >= 0.6 * v.length || (spread(cs.map(c => c.x0)) < 2 && spread(cs.map(c => c.x1)) > 6);
+  });
+  cl = cl.filter(k => !codeCols.includes(k));
+  page.hasCodes = codeCols.length > 0;
   // ponytail: a column of small sequence ints (1 2 3 / (1) (2)) only appears as a header numbering row; drop such lines
   const colOf = c => cl.findIndex(k => c.x1 >= k.l - 4 && c.x0 <= k.r + 4);
-  const isColNumLine = L => L.chunks.length >= 3 && L.chunks.every(c => /^\(?\d{1,2}\)?$/.test(c.s));
   for (const L of lines) {
     L.colnum = isColNumLine(L);
     L.vals = {}; L.text = [];
@@ -394,6 +409,7 @@ function analysePage(page, lines) {
       const ci = (NUM.test(c.s) || NIL.test(c.s)) && !L.colnum ? colOf(c) : -1;
       if (ci >= 0 && L.vals[ci] == null) L.vals[ci] = c.s; else L.text.push(...c.toks);
     }
+    L.code = (L.text.find(t => /^[\d.]+$/.test(t.s) && codeCols.some(k => t.x1 >= k.l - 4 && t.x0 <= k.r + 4)) || {}).s || '';
     const n = Object.values(L.vals).filter(v => NUM.test(v));
     // a lone small integer is usually header text ("column 3 & 4"), not a value
     L.isData = !L.colnum && (n.length >= 2 || (n.length === 1 && /\d{3}|[.,]/.test(n[0])));
@@ -413,6 +429,15 @@ function fullRule(page, y0, y1, tx0, tx1, minCover) {
     const cov = g.segs.reduce((s, r) => s + Math.max(0, Math.min(r.x1, tx1) - Math.max(r.x0, tx0)), 0);
     return cov >= minCover * (tx1 - tx0);
   }).map(g => g.y).sort((a, b) => a - b);
+}
+
+const noCode = L => L.text.filter(t => t.s !== L.code);
+const text = (ls, f) => clean(ls.map(L => f(noCode(L), L.h)).join(' '));
+// headings: a new one starts at each coded line, wrapped lines continue it
+function mkHeads(lines) {
+  const hs = [];
+  for (const L of lines) { if (L.code || !hs.length) hs.push({ code: L.code, ls: [] }); hs[hs.length - 1].ls.push(L); }
+  return hs.map(h => ({ code: h.code, text: text(h.ls, latinText) })).filter(h => h.text);
 }
 
 // One table per page: header block above the first data line, data rows below it.
@@ -442,7 +467,7 @@ function pageTable(page, lines, cols, runningSet, pageNo) {
     if (!header.length && gap > 6 * lh) break;
     header.unshift(L);
   }
-  const label = c => clean(latinText(header.flatMap(L => L.chunks.filter(k => k.x1 >= c.l - 3 && k.x0 <= c.r + 3).flatMap(k => k.toks)), lh));
+  const label = c => clean(header.map(L => latinText(L.chunks.filter(k => k.x1 >= c.l - 3 && k.x0 <= c.r + 3).flatMap(k => k.toks), lh)).join(' '));
   const labels = cols.map(label);
   const titleLines = lines.slice(0, Math.max(0, lines.indexOf(header[0] || lines[start]))).map(L => clean(latinText(L.toks, L.h))).filter(Boolean);
 
@@ -457,30 +482,70 @@ function pageTable(page, lines, cols, runningSet, pageNo) {
 
   // rows: bands between full-width rules; inside a band a new row starts at each further data line
   const rules = rulesIn(data[0].y - lh * 1.5, data[data.length - 1].y + lh);
+  // ponytail: with a code column, a coded text line (and its wrapped lines) heads the rows below it; else text follows its data line
   const rows = [];
-  let cur = null, band = -1;
+  let cur = null, band = -1, heads = [], inHead = false;
   for (const L of data) {
     const b = rules.filter(y => y < L.y - L.h * 0.8).length;
-    if (!cur || b !== band || (L.isData && cur.hasData)) { cur = { lines: [], hasData: false }; rows.push(cur); band = b; }
+    if (page.hasCodes && !L.isData && (L.code || inHead)) {
+      if (L.code && !inHead) heads = [];
+      heads.push(L); inHead = true; cur = null; continue;
+    }
+    inHead = false;
+    if (!cur || b !== band || (L.isData && cur.hasData)) { cur = { ctx: heads, lines: [], hasData: false }; rows.push(cur); band = b; heads = []; }
     cur.lines.push(L);
     if (L.isData) cur.hasData = true;
   }
   return {
-    pageNo, cols, labels, hasHeader: labels.some(Boolean), title: bestTitle(titleLines),
+    tailHeads: mkHeads(heads), // headings at the page bottom belong to the next page's first rows
+    pageNo, cols, labels, hasHeader: labels.some(Boolean), title: titleLines.slice(-3).join(' · '),
     rows: rows.filter(r => r.hasData).map(r => {
       const vals = cols.map((_, ci) => (r.lines.find(L => L.vals[ci] != null) || { vals: {} }).vals[ci] ?? '');
-      const all = r.lines.flatMap(L => L.toks);
-      const box = { x0: Math.min(...all.map(t => t.x0)), x1: Math.max(...all.map(t => t.x1)), y0: Math.min(...r.lines.map(L => L.y - L.h)), y1: Math.max(...r.lines.map(L => L.y)) + 2 };
-      return { page: pageNo, box, vals, latin: clean(r.lines.map(L => latinText(L.text, L.h)).join(' ')), all: clean(r.lines.map(L => joinToks(L.text, L.h)).join(" ")) };
+      const ls = [...r.ctx, ...r.lines], all = ls.flatMap(L => L.toks);
+      const box = { x0: Math.min(...all.map(t => t.x0)), x1: Math.max(...all.map(t => t.x1)), y0: Math.min(...ls.map(L => L.y - L.h)), y1: Math.max(...ls.map(L => L.y)) + 2 };
+      return { page: pageNo, coded: !!page.hasCodes, box, vals, code: (r.lines.find(L => L.code) || {}).code || '', heads: mkHeads(r.ctx),
+        item: text(r.lines, latinText), all: clean(r.lines.map(L => joinToks(noCode(L), L.h)).join(' ')) };
     }),
   };
 }
 
-// the most descriptive nearby line, skipping unit notes like "(Rs. in thousand)"
-function bestTitle(lines) {
-  const cand = lines.slice(-4).map(l => l.replace(/^[^A-Za-z]*\]\s*·?\s*/, '').trim()).filter(l => !/^\W*\(?\s*(rs|₹)/i.test(l));
-  const letters = l => (l.match(/[A-Za-z]/g) || []).length;
-  return cand.sort((a, b) => letters(b) - letters(a))[0] || '';
+// Row hierarchy across pages: codes nest by prefix (05.01 > 05.01.01), "(Major/Minor Head)" labels reset levels,
+// "Total - X" closes X, and an uncoded row right after a data row with no heading of its own (Voted/Charged) is its breakdown.
+// ponytail: tuned to Indian budget coding; uncoded layouts just get the headings directly above each row
+const isMajor = s => /\(Major\s*Head\)/i.test(s), isMinor = s => /\(Minor\s*Head\)/i.test(s);
+const headKey = s => s.replace(/\((Sub|Minor|Major|Sub-Major)?\s*-?\s*Head\)/ig, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+function nest(rows) {
+  let stack = [], prev = null;
+  const place = h => {
+    if (isMajor(h.text)) stack = [];
+    else if (isMinor(h.text)) while (stack.length && !isMajor(stack[stack.length - 1].text)) stack.pop();
+    else while (stack.length) {
+      const top = stack[stack.length - 1];
+      if ((h.code && top.code && h.code.startsWith(top.code + '.')) || isMajor(top.text) || isMinor(top.text) || !h.code) break;
+      stack.pop();
+    }
+    stack.push(h);
+  };
+  for (const r of rows) {
+    r.heads.forEach(place);
+    const tot = r.item.match(/^\S{0,3}\s*Total\s*-\s*(.+)/i); // tolerate a few unreadable glyphs before "Total"
+    let parent;
+    if (tot) {
+      const k = headKey(tot[1]), keys = stack.map(h => headKey(h.text));
+      let i = keys.lastIndexOf(k); if (i < 0) i = keys.findLastIndex(hk => hk && (hk.includes(k) || k.includes(hk)));
+      if (i >= 0) stack = stack.slice(0, i);
+      parent = stack.map(h => h.text);
+    } else if (r.code) { place({ code: r.code, text: r.item }); parent = stack.slice(0, -1).map(h => h.text); }
+    else if (r.coded && !r.heads.length && prev) {
+      const up = prev.isBreak ? prev.up : prev; // Voted after Charged: siblings under the same row
+      parent = [...up.parent, up.item]; up.hasBreakdown = true; r.isBreak = true; r.up = up;
+    }
+    else parent = stack.map(h => h.text);
+    r.parent = parent.filter((x, i, a) => x && x !== a[i - 1]);
+    r.latin = [...r.parent, r.item].filter((x, i, a) => x && x !== a[i - 1]).join(' › ');
+    prev = r;
+  }
+  for (const r of rows) { delete r.heads; delete r.up; delete r.isBreak; delete r.coded; }
 }
 
 async function extractTables(pdfjs, doc, onProgress) {
@@ -493,15 +558,17 @@ async function extractTables(pdfjs, doc, onProgress) {
     onProgress && onProgress(n, doc.numPages);
   }
   // running headers/footers: same text in the top/bottom 12% of many pages, or a lone page number there
-  const key = L => L.toks.map(t => t.s).join(' ').replace(/\d+/g, '#');
+  const key = L => L.toks.map(t => t.s.replace(/\d+/g, '#')).filter(w => w !== '#').sort().join(' ') || '#';
   const freq = new Map();
-  for (const p of pages) for (const k of new Set(p.lines.filter(L => L.y < p.H * 0.12 || L.y > p.H * 0.9).map(key))) freq.set(k, (freq.get(k) || 0) + 1);
+  for (const p of pages) for (const k of new Set(p.lines.filter(L => L.y < p.H * 0.16 || L.y > p.H * 0.9).map(key))) freq.set(k, (freq.get(k) || 0) + 1);
   const textOf = p => p.lines.map(L => L.toks.map(t => t.s).join(' ')).join('\n');
   const tables = [];
+  let carry = [];
   pages.forEach((p, i) => {
-    const running = new Set(p.lines.filter(L => (L.y < p.H * 0.12 || L.y > p.H * 0.9) && (/^#$/.test(key(L)) || (pages.length >= 5 && freq.get(key(L)) >= pages.length * 0.3))));
+    const running = new Set(p.lines.filter(L => (L.y < p.H * 0.16 || L.y > p.H * 0.9) && (key(L) === '#' || (pages.length >= 5 && freq.get(key(L)) >= Math.max(3, pages.length * 0.1)))));
     const t = pageTable(p, p.lines, p.cols, running, i + 1);
     if (!t || !t.rows.length) return;
+    t.rows[0].heads.unshift(...carry); carry = t.tailHeads;
     const prev = tables[tables.length - 1];
     // continuation = next page whose columns line up with the previous table's (labels may differ slightly)
     const map = prev && prev.pages[prev.pages.length - 1] === i ? t.cols.map(c => {
@@ -515,27 +582,61 @@ async function extractTables(pdfjs, doc, onProgress) {
     if (cont) {
       prev.pages.push(i + 1);
       prev.unit = prev.unit || detectUnit(textOf(p));
-      // ponytail: columns with no counterpart in the first page are dropped
+      map.forEach((j, k) => { if (j < 0 && t.labels[k]) { map[k] = prev.cols.length; prev.cols.push(t.cols[k]); prev.labels.push(t.labels[k] || `Column ${map[k] + 1}`); } });
       for (const r of t.rows) { const v = prev.cols.map(() => ''); map.forEach((j, k) => { if (j >= 0 && !v[j]) v[j] = r.vals[k]; }); r.vals = v; prev.rows.push(r); }
     } else tables.push({ id: tables.length, title: t.title || `Table on page ${i + 1}`, labels: t.labels.map((l, j) => l || `Column ${j + 1}`), cols: t.cols, pages: [i + 1], rows: t.rows, unit: detectUnit(textOf(p)) });
   });
+  // ponytail: unit line unreadable on some pages (symbol fonts) -> assume the document's most common unit, flagged
+  const uc = {}; for (const t of tables) if (t.unit) uc[t.unit] = (uc[t.unit] || 0) + 1;
+  const docUnit = Object.keys(uc).sort((a, b) => uc[b] - uc[a])[0];
+  if (docUnit) for (const t of tables) if (!t.unit) { t.unit = docUnit; t.unitAssumed = true; }
+  for (const t of tables) nest(t.rows);
+  // budget documents: a "(Major Head)" heading starts a new table and names it
+  const out = [];
+  for (const t of tables) {
+    let cur = null;
+    for (const r of t.rows) {
+      const mh = r.latin.split(' › ').slice(0, -1).find(x => /\(Major\s*Head\)/i.test(x) && !/^Total\b/i.test(x));
+      if (!cur || (mh && cur.mh !== mh)) {
+        cur = { ...t, id: out.length, rows: [], mh, title: mh || (cur ? cur.title : t.title) };
+        out.push(cur);
+      }
+      cur.rows.push(r);
+    }
+  }
+  for (const t of out) {
+    t.pages = [...new Set(t.rows.map(r => r.page))];
+    const keep = t.cols.map((_, j) => t.rows.some(r => r.vals[j])); // drop columns left empty by the split
+    t.cols = t.cols.filter((_, j) => keep[j]); t.labels = t.labels.filter((_, j) => keep[j]);
+    for (const r of t.rows) r.vals = keep.map((_, j) => r.vals[j] ?? '').filter((_, j) => keep[j]);
+    // section that began on an earlier page: its closing "Total - X (Major Head)" row names it
+    const m = !t.mh && t.rows.map(r => r.latin.match(/Total\s*-\s*(.+?\(Major\s*Head\))/i)).find(Boolean);
+    if (m) t.title = m[1];
+    delete t.mh;
+  }
+  tables.splice(0, tables.length, ...out);
   // entity: "Ministry/Department of ..." from repeated page headers, else from the first pages
-  const header = [...freq].filter(([, n]) => n >= pages.length * 0.3).map(([k]) => k).join('\n');
-  const entity = detectEntity(header) || detectEntity(pages.slice(0, 3).map(textOf).join('\n'));
+  const header = [...freq].filter(([, n]) => n >= Math.max(3, pages.length * 0.1)).map(([k]) => k).join('\n');
+  const entity = detectEntity(header, pages.slice(0, 3).map(textOf).join('\n'));
   return { tables, entity };
 }
 
 const UNITS = { rupees: 1, thousand: 1e3, lakh: 1e5, crore: 1e7 };
 function detectUnit(text) {
-  const m = text.match(/in\s*(thousands?|lakhs?|crores?)\b/i);
+  const m = text.match(/in\s*(thousands?|lakhs?|crores?)\b/i) || text.match(/(हज़ार|हजार|लाख|करोड़)/);
   if (!m) return '';
   const u = m[1].toLowerCase();
-  return /^th/.test(u) ? "thousand" : /^la/.test(u) ? 'lakh' : 'crore';
+  return /^th|हज/.test(u) ? 'thousand' : /^la|लाख/.test(u) ? 'lakh' : 'crore';
 }
-function detectEntity(text) {
-  const m = text.match(/\b((?:Ministry|Department|Directorate|Government) of [A-Za-z ,&'-]{3,80}?)(?=\s*(?:$|\n|\(|for\s+\d{4}|\d))/im) ||
-            text.match(/\b([A-Z][A-Za-z ,&]{3,60}? Department)\b/m);
-  return m ? m[1].trim().replace(/[ ,]+$/, '') : '';
+const titleCase = s => s === s.toUpperCase() ? s.toLowerCase().replace(/\b[a-z]/g, c => c.toUpperCase()).replace(/\b(Of|And|For|The|In)\b/g, w => w.toLowerCase()) : s;
+// most specific first: "Ministry of Finance" beats a "Government of India" footer
+function detectEntity(...texts) {
+  for (const kw of ['Ministry', 'Department', 'Directorate', 'Government']) for (const text of texts) {
+    const m = text.match(new RegExp(`\\b(${kw} of [A-Za-z ,&'-]{3,80}?)(?=\\s*(?:$|\\n|\\(|for\\s+\\d{4}|\\d))`, 'im'));
+    if (m) return titleCase(m[1].trim().replace(/[ ,]+$/, ''));
+  }
+  const m = texts.join('\n').match(/\b([A-Z][A-Za-z ,&]{3,60}? Department)\b/m);
+  return m ? m[1].trim() : '';
 }
 
 // "10,11,297" / "(1,200)" / "..." -> number; anything else -> null
@@ -565,7 +666,7 @@ function bestColumn(name, labels) {
   return best;
 }
 
-if (typeof module !== 'undefined') module.exports = { extractTables, keywordMatcher, fmtNum, parseNum, bestColumn, UNITS };
+if (typeof module !== 'undefined') module.exports = { readPage, toLines, analysePage, pageTable, extractTables, keywordMatcher, fmtNum, parseNum, bestColumn, UNITS };
 </script>
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -676,7 +777,7 @@ function renderTables() {
   const list = shownTables();
   $('tables').innerHTML = list.length ? list.map(t => `<label class="titem"><input type="checkbox" class="tsel" value="${t.uid}" ${SEL.has(t.uid) ? 'checked' : ''}>
     <div><div class="t">${esc(t.title)}</div>
-      <div class="meta">${FILES.length > 1 ? esc(t.file.name) + ' · ' : ''}pages ${pagesOf(t)} · ${t.rows.length} rows · amounts in ${UNIT_NAMES[t.unit]}</div>
+      <div class="meta">${FILES.length > 1 ? esc(t.file.name) + ' · ' : ''}pages ${pagesOf(t)} · ${t.rows.length} rows · amounts in ${UNIT_NAMES[t.unit]}${t.unitAssumed && t.unit === t.unitDetected ? ' (assumed — check)' : ''}</div>
       <details><summary>Columns, sample rows and unit</summary><div>
         ${t.labels.map(l => `<span class="chip">${esc(l)}</span>`).join('')}
         <p class="muted" style="margin:8px 0">${t.rows.slice(0, 3).map(r => esc((r.latin || r.all).slice(0, 120))).join('<br>')}</p>
@@ -697,12 +798,16 @@ $('all').onclick = () => { shownTables().forEach(t => SEL.add(t.uid)); renderTab
 $('none').onclick = () => { SEL.clear(); renderTables(); resetFrom(1); };
 
 // ---------- 3–4. search + review ----------
-const desc = r => $('latin').checked ? r.latin : r.all;
+const desc = r => $('latin').checked ? (r.item ?? r.latin) : r.all;
+// search also looks at the parent headings, so "Charged" under a health heading is found
+const hay = r => [...(r.parent || []), desc(r)].join(' › ');
 function rowFlags(t, r) {
   const f = [], d = desc(r);
   if (!d) f.push('No description');
-  else if (d.split(/\s+/).length < 3) f.push('Short description');
+  else if (d.split(/\s+/).length < 3 && !(r.parent || []).length) f.push('Short description');
   if (r.vals.every(v => !v)) f.push('No values');
+  if (/^\S{0,3}\s*Total\b/i.test(r.item || '')) f.push('Total row — sums rows above');
+  if (r.hasBreakdown) f.push('Has breakdown below — avoid double counting');
   if (r.vals.some(v => v && parseNum(v) == null)) f.push('Unreadable number');
   if (!t.unit) f.push('Unit unknown');
   return f;
@@ -712,7 +817,7 @@ $('go').onclick = () => {
   if (!tabs.length) { toast('Tick at least one table first.'); show(1); return; }
   if (!KW.kw.length) { toast('Add at least one word to include.'); $('kw-in').focus(); return; }
   const inc = keywordMatcher(KW.kw), exc = keywordMatcher(KW.xkw);
-  MATCHES = tabs.map(t => ({ t, rows: t.rows.map(r => ({ r, k: inc(desc(r)), x: exc(desc(r)) })).filter(m => m.k.length)
+  MATCHES = tabs.map(t => ({ t, rows: t.rows.map(r => ({ r, k: inc(hay(r)), x: exc(hay(r)) })).filter(m => m.k.length)
     .map(m => ({ ...m, on: !m.x.length, flags: rowFlags(t, m.r) })) })).filter(m => m.rows.length);
   renderRaw();
   if (!OUTCOLS.length) presetSample();
@@ -730,7 +835,7 @@ function renderRaw() {
       <span class="spacer"></span><button class="ghost sm" data-copy="${i}">${ICON_COPY} Copy these rows</button></div>
     <div class="scroll"><table><thead><tr><th><input type="checkbox" data-allon="${i}" ${m.rows.every(x => x.on) ? 'checked' : ''} aria-label="Keep all rows"></th><th>Description</th>${m.t.labels.map(l => `<th>${esc(l)}</th>`).join('')}<th></th></tr></thead><tbody>
     ${m.rows.map((x, j) => `<tr class="${x.on ? '' : 'off'}"><td><input type="checkbox" data-on="${i}:${j}" ${x.on ? 'checked' : ''} aria-label="Keep row"></td>
-      <td>${hl(desc(x.r), x.k)}${x.x.length ? `<div><span class="flag">left out: mentions ${esc(x.x.join(', '))}</span></div>` : ''}${x.flags.length ? `<div>${x.flags.map(f => `<span class="flag">check: ${esc(f.toLowerCase())}</span>`).join('')}</div>` : ''}</td>
+      <td>${x.r.parent && x.r.parent.length ? `<div class="muted" style="font-size:11px">${hl(x.r.parent.join(' › '), x.k)}</div>` : ''}${hl(desc(x.r), x.k)}${x.x.length ? `<div><span class="flag">left out: mentions ${esc(x.x.join(', '))}</span></div>` : ''}${x.flags.length ? `<div>${x.flags.map(f => `<span class="flag">check: ${esc(f.toLowerCase())}</span>`).join('')}</div>` : ''}</td>
       ${x.r.vals.map(v => `<td class="num">${esc(v)}</td>`).join('')}<td class="view"><button class="link" data-view="${i}:${j}">${ICON_EYE} view p.${x.r.page}</button></td></tr>`).join('')}
     </tbody></table></div>`).join('');
   $('raw').querySelectorAll('[data-on]').forEach(c => c.onchange = () => { const [i, j] = c.dataset.on.split(':'); MATCHES[i].rows[j].on = c.checked; c.closest('tr').classList.toggle('off', !c.checked); renderSummaryAndOut(); });
@@ -738,7 +843,7 @@ function renderRaw() {
   $('raw').querySelectorAll('[data-view]').forEach(b => b.onclick = () => { const [i, j] = b.dataset.view.split(':'); view(MATCHES[i].t, MATCHES[i].rows[j].r); });
   $('raw').querySelectorAll('[data-copy]').forEach(b => b.onclick = () => {
     const m = MATCHES[+b.dataset.copy], rows = m.rows.filter(x => x.on);
-    copyRows([['Page', 'Keywords', 'Description', ...m.t.labels], ...rows.map(x => [x.r.page, x.k.join(', '), desc(x.r), ...x.r.vals])], `Copied ${rows.length} rows with headers`);
+    copyRows([['Page', 'Keywords', 'Parent headings', 'Description', ...m.t.labels], ...rows.map(x => [x.r.page, x.k.join(', '), (x.r.parent || []).join(' › '), desc(x.r), ...x.r.vals])], `Copied ${rows.length} rows with headers`);
   });
 }
 function renderSummaryAndOut() {
@@ -748,7 +853,7 @@ function renderSummaryAndOut() {
 }
 
 // ---------- 5. output builder ----------
-const FIELDS = { entity: 'Entity', description: 'Description', file: 'File', table: 'Table', page: 'Page', keywords: 'Keywords', unit: 'Unit', flags: 'Flags' };
+const FIELDS = { entity: 'Entity', description: 'Description', parent: 'Parent headings', file: 'File', table: 'Table', page: 'Page', keywords: 'Keywords', unit: 'Unit', flags: 'Flags' };
 const normLabel = l => [...labelTokens(l)].join(' ');
 function sourceLabels() { // value columns across the matched tables, merged when the labels mean the same thing
   const seen = new Map();
@@ -758,15 +863,18 @@ function sourceLabels() { // value columns across the matched tables, merged whe
 const valueCol = label => ({ type: 'value', label, name: label, map: Object.fromEntries(MATCHES.map(m => [m.t.uid, bestColumn(label, m.t.labels)])) });
 // "Actual expenditure to the end of 2024-" -> "Actual 2024-25"
 const shortName = l => { const m = l.match(/\b(actual|budget|revised|probable)\b.*?\b(\d{4})/i); return m ? `${m[1][0].toUpperCase() + m[1].slice(1).toLowerCase()} ${m[2]}-${String((+m[2] + 1) % 100).padStart(2, '0')}` : l; };
+const hasParents = () => MATCHES.some(m => m.rows.some(x => x.r.parent && x.r.parent.length));
 function presetSample() {
   const labels = sourceLabels();
   const actual = labels.find(l => /actual/i.test(l)) || labels[0];
-  OUTCOLS = [{ type: 'field', key: 'entity', name: 'Entity' }, { type: 'field', key: 'description', name: 'Description' }];
+  OUTCOLS = [{ type: 'field', key: 'entity', name: 'Entity' }];
+  if (hasParents()) OUTCOLS.push({ type: 'field', key: 'parent', name: FIELDS.parent });
+  OUTCOLS.push({ type: 'field', key: 'description', name: 'Description' });
   if (actual) OUTCOLS.push({ ...valueCol(actual), name: shortName(actual) });
 }
 $('preset-sample').onclick = () => { presetSample(); renderBuilder(); };
 $('preset-all').onclick = () => {
-  OUTCOLS = ['entity', 'description', 'page'].map(k => ({ type: 'field', key: k, name: FIELDS[k] })).concat(sourceLabels().map(valueCol));
+  OUTCOLS = ['entity', ...(hasParents() ? ['parent'] : []), 'description', 'page'].map(k => ({ type: 'field', key: k, name: FIELDS[k] })).concat(sourceLabels().map(valueCol));
   renderBuilder();
 };
 $('addcol').onchange = () => {
@@ -802,7 +910,7 @@ function renderBuilder() {
 function cellOf(c, m, x) {
   const t = m.t, r = x.r;
   if (c.type === 'field') {
-    const s = { entity: ($('prefix').value || '') + (t.file.entity || ''), description: desc(r), file: t.file.name, table: t.title, page: r.page,
+    const s = { entity: ($('prefix').value || '') + (t.file.entity || ''), description: desc(r), parent: (r.parent || []).join(' › '), file: t.file.name, table: t.title, page: r.page,
       keywords: x.k.join(', '), unit: UNIT_NAMES[$('unit').value || t.unit], flags: x.flags.join('; ') }[c.key];
     return { v: c.key === 'page' ? r.page : null, s: String(s ?? '') };
   }
